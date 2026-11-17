@@ -1,15 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppKitAccount } from '@reown/appkit/react';
 import { useAppKit } from '@reown/appkit/react';
 import type { Position } from '../types';
 import { getUserPositions, collectFees, removeLiquidity } from '../services/api/positionService';
 import { useToast } from '../context/ToastContext';
-import { formatNumber, shortenTxHash } from '../utils/formatUtils';
+import { formatNumber } from '../utils/formatUtils';
+import { getErrorMessage } from '../utils/errors';
 import { FEE_TIERS } from '../config/contracts';
 import { useNavigate } from 'react-router-dom';
 import { recordTxHistory } from '../services/history/txHistoryStorage';
 import TokenIcon from '../components/common/TokenIcon';
+import { Wallet, Inbox } from 'lucide-react';
 
 // ─── stagger container for the list ─────────────────────────────────────────
 const listVariants = {
@@ -140,7 +142,7 @@ function PositionCard({
               borderRadius: 10, padding: '12px 14px', marginBottom: 14,
             }}>
               <div style={{ fontSize: 12, color: hasFees ? 'var(--accent-secondary)' : 'var(--text-secondary)', marginBottom: 8, fontWeight: 500 }}>
-                Unclaimed Fees {hasFees ? '🎉' : ''}
+                Unclaimed Fees
               </div>
               {[
                 { symbol: position.token0.symbol, fee: position.unclaimedFees0 },
@@ -192,11 +194,36 @@ export default function PositionsPage() {
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState<'all' | 'inRange' | 'outRange'>('all');
   const [actionLoading, setActionLoading] = useState<number | null>(null);
+  const [positionPage, setPositionPage] = useState(0);
+  const pageSize = 10;
+
+  // Keep a stable reference to `showToast` so the fetch effect does not
+  // re-run when the toast function identity changes (some contexts recreate it).
+  const toastRef = useRef(showToast);
+  useEffect(() => { toastRef.current = showToast }, [showToast]);
 
   useEffect(() => {
     if (!isConnected || !address) { setPositions([]); return; }
+    let cancelled = false;
     setLoading(true);
-    getUserPositions(address).then(setPositions).finally(() => setLoading(false));
+
+    (async () => {
+      try {
+        const res = await getUserPositions(address);
+        if (cancelled) return;
+        setPositions(res.positions);
+      } catch (err) {
+        if (!cancelled) {
+          console.error('Failed to load positions:', err);
+          toastRef.current('error', getErrorMessage(err, 'Could not load positions'));
+          setPositions([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true };
   }, [isConnected, address]);
 
   const handleCollect = async (tokenId: number) => {
@@ -208,11 +235,11 @@ export default function PositionsPage() {
       const pos = positions.find(p => p.tokenId === tokenId);
       const pair = pos ? `${pos.token0.symbol}/${pos.token1.symbol}` : `position #${tokenId}`;
       recordTxHistory(address, { hash: result.hash, kind: 'collect_fees', summary: `Collected fees · ${pair}` });
-      showToast('success', `Fees collected! Tx: ${shortenTxHash(result.hash)}`);
+      showToast('success', 'Fees collected', { txHash: result.hash });
       const updated = await getUserPositions(address);
-      setPositions(updated);
+      setPositions(updated.positions);
     } catch (err) {
-      showToast('error', (err as Error)?.message ?? 'Failed to collect fees');
+      showToast('error', getErrorMessage(err, 'Failed to collect fees'));
     } finally {
       setActionLoading(null);
     }
@@ -229,10 +256,10 @@ export default function PositionsPage() {
       if (address) {
         recordTxHistory(address, { hash: result.hash, kind: 'remove_liquidity', summary: `Removed liquidity · ${pair} · NFT #${tokenId}` });
       }
-      showToast('success', `Liquidity removed! Tx: ${shortenTxHash(result.hash)}`);
+      showToast('success', 'Liquidity removed', { txHash: result.hash });
       setPositions(prev => prev.filter(p => p.tokenId !== tokenId));
     } catch (err) {
-      showToast('error', (err as Error)?.message ?? 'Failed to remove liquidity');
+      showToast('error', getErrorMessage(err, 'Failed to remove liquidity'));
     } finally {
       setActionLoading(null);
     }
@@ -250,35 +277,40 @@ export default function PositionsPage() {
 
   if (!isConnected) {
     return (
-      <motion.div
-        style={{ textAlign: 'center', padding: '60px 20px' }}
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ type: 'spring', stiffness: 280, damping: 22 }}
-      >
-        <div style={{ fontSize: 48, marginBottom: 16 }}>🔗</div>
-        <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Connect Your Wallet</h2>
-        <p style={{ color: 'var(--text-secondary)', marginBottom: 24, fontSize: 15 }}>
-          Connect your wallet to view your liquidity positions.
-        </p>
-        <motion.button
-          className="btn-primary"
-          style={{ width: 'auto', padding: '12px 32px' }}
-          onClick={() => open()}
-          whileHover={{ scale: 1.015 }}
-          whileTap={{ scale: 0.985 }}
-        >
-          Connect Wallet
-        </motion.button>
-      </motion.div>
+      <div style={{ minHeight: '100vh', background: 'var(--bg-primary)', paddingBottom: 80 }}>
+        <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 24px' }}>
+          <motion.div
+            style={{ textAlign: 'center', padding: '60px 20px' }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ type: 'spring', stiffness: 280, damping: 22 }}
+          >
+            <Wallet size={48} strokeWidth={1.5} style={{ color: 'var(--text-secondary)', margin: '0 auto 16px' }} />
+            <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Connect Your Wallet</h2>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: 24, fontSize: 15 }}>
+              Connect your wallet to view your liquidity positions.
+            </p>
+            <motion.button
+              className="btn-primary"
+              style={{ width: 'auto', padding: '12px 32px' }}
+              onClick={() => open()}
+              whileHover={{ scale: 1.015 }}
+              whileTap={{ scale: 0.985 }}
+            >
+              Connect Wallet
+            </motion.button>
+          </motion.div>
+        </div>
+      </div>
     );
   }
 
   return (
-    <div>
-      <motion.div
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}
-        initial={{ opacity: 0, y: -8 }}
+    <div style={{ minHeight: '100vh', background: 'var(--bg-primary)', paddingBottom: 80 }}>
+      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 24px' }}>
+        <motion.div
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, paddingTop: 52, paddingBottom: 8 }}
+          initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
       >
@@ -293,6 +325,8 @@ export default function PositionsPage() {
           + New Position
         </motion.button>
       </motion.div>
+
+
 
       {/* Summary Bar */}
       <AnimatePresence>
@@ -330,7 +364,7 @@ export default function PositionsPage() {
             <motion.button
               key={f}
               className={`tab${filter === f ? ' active' : ''}`}
-              onClick={() => setFilter(f)}
+              onClick={() => { setFilter(f); setPositionPage(0); }}
               style={{ flex: 1 }}
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.97 }}
@@ -342,14 +376,88 @@ export default function PositionsPage() {
       )}
 
       {loading ? (
-        <motion.div
-          style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)' }}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-        >
-          <span className="spinner" style={{ width: 32, height: 32 }} />
-          <p style={{ marginTop: 12 }}>Loading positions...</p>
-        </motion.div>
+        <div>
+          {Array.from({ length: 3 }).map((_, i) => (
+            <motion.div
+              key={i}
+              style={{
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-lg)',
+                padding: '20px',
+                marginBottom: 12,
+                overflow: 'hidden',
+              }}
+              initial={{ opacity: 0.6 }}
+              animate={{ opacity: [0.6, 1, 0.6] }}
+              transition={{ duration: 1.5, repeat: Infinity, ease: 'easeInOut' }}
+            >
+              <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+                {/* Token icons skeleton */}
+                <div style={{ display: 'flex', gap: -8 }}>
+                  <div
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: '50%',
+                      background: 'var(--bg-secondary)',
+                    }}
+                  />
+                  <div
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: '50%',
+                      background: 'var(--bg-secondary)',
+                      marginLeft: -8,
+                    }}
+                  />
+                </div>
+
+                {/* Header info skeleton */}
+                <div style={{ flex: 1 }}>
+                  <div
+                    style={{
+                      height: 16,
+                      borderRadius: 4,
+                      background: 'var(--bg-secondary)',
+                      marginBottom: 8,
+                      width: '40%',
+                    }}
+                  />
+                  <div
+                    style={{
+                      height: 12,
+                      borderRadius: 4,
+                      background: 'var(--bg-secondary)',
+                      width: '25%',
+                    }}
+                  />
+                </div>
+
+                {/* Badge skeleton */}
+                <div
+                  style={{
+                    height: 20,
+                    borderRadius: 4,
+                    background: 'var(--bg-secondary)',
+                    width: 80,
+                  }}
+                />
+
+                {/* Chevron skeleton */}
+                <div
+                  style={{
+                    height: 16,
+                    width: 16,
+                    borderRadius: 4,
+                    background: 'var(--bg-secondary)',
+                  }}
+                />
+              </div>
+            </motion.div>
+          ))}
+        </div>
       ) : filtered.length === 0 ? (
         <motion.div
           style={{ textAlign: 'center', padding: '40px 20px' }}
@@ -357,7 +465,7 @@ export default function PositionsPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ type: 'spring', stiffness: 280, damping: 22 }}
         >
-          <div style={{ fontSize: 40, marginBottom: 12 }}>💧</div>
+          <Inbox size={40} strokeWidth={1.5} style={{ color: 'var(--text-secondary)', margin: '0 auto 12px' }} />
           <h3 style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>
             {positions.length === 0 ? 'No positions yet' : 'No positions match this filter'}
           </h3>
@@ -380,24 +488,78 @@ export default function PositionsPage() {
         /* ── Staggered card list ── */
         <motion.div
           variants={listVariants}
-          initial="hidden"
-          animate="visible"
           whileInView="visible"
-          viewport={{ once: true, margin: '-40px' }}
         >
           <AnimatePresence>
-            {filtered.map(position => (
+            {filtered.slice(positionPage * pageSize, (positionPage + 1) * pageSize).map(position => (
               <motion.div key={position.tokenId} variants={cardVariants} exit={cardVariants.exit} layout>
                 <PositionCard
                   position={position}
-                  onCollect={actionLoading === position.tokenId ? () => {} : handleCollect}
-                  onRemove={actionLoading === position.tokenId ? () => {} : handleRemove}
+                  onCollect={actionLoading === position.tokenId ? () => { } : handleCollect}
+                  onRemove={actionLoading === position.tokenId ? () => { } : handleRemove}
                 />
               </motion.div>
             ))}
           </AnimatePresence>
+
+          {filtered.length > pageSize && (() => {
+            const totalPages = Math.ceil(filtered.length / pageSize);
+            const startIdx = positionPage * pageSize + 1;
+            const endIdx = Math.min((positionPage + 1) * pageSize, filtered.length);
+
+            return (
+              <div style={{ marginTop: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                  Showing {startIdx}–{endIdx} of {filtered.length}
+                </div>
+
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    className="btn-pagination"
+                    onClick={() => setPositionPage(0)}
+                    disabled={positionPage === 0}
+                  >
+                    «
+                  </button>
+                  <button
+                    className="btn-pagination"
+                    onClick={() => setPositionPage(p => Math.max(0, p - 1))}
+                    disabled={positionPage === 0}
+                  >
+                    ← Prev
+                  </button>
+
+                  {Array.from({ length: totalPages }).map((_, i) => (
+                    <button
+                      key={i}
+                      className={`btn-pagination ${positionPage === i ? 'active' : ''}`}
+                      onClick={() => setPositionPage(i)}
+                    >
+                      {i + 1}
+                    </button>
+                  ))}
+
+                  <button
+                    className="btn-pagination"
+                    onClick={() => setPositionPage(p => Math.min(totalPages - 1, p + 1))}
+                    disabled={positionPage === totalPages - 1}
+                  >
+                    Next →
+                  </button>
+                  <button
+                    className="btn-pagination"
+                    onClick={() => setPositionPage(totalPages - 1)}
+                    disabled={positionPage === totalPages - 1}
+                  >
+                    »
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
         </motion.div>
       )}
+      </div>
     </div>
   );
 }

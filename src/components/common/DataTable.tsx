@@ -1,5 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
+import type { ReactNode } from 'react';
 import toast from 'react-hot-toast';
+import { Copy, Inbox } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -7,9 +9,24 @@ export type ColumnType = 'text' | 'number' | 'date' | 'badge' | 'status' | 'hash
 
 export interface ColumnConfig {
   key: string;
+  /** Plain label (sort / search / fallback) */
   label: string;
+  /** Optional rich header (e.g. tooltips). When set, shown instead of `label` in the table head. */
+  labelNode?: ReactNode;
   type: ColumnType;
   sortable?: boolean;
+  /**
+   * When `bare` is true, grid column track (e.g. `1.5fr`, `minmax(0,2fr)`).
+   * Defaults to `1fr` per column.
+   */
+  gridTrack?: string;
+  /** Cell horizontal alignment (bare / lending tables) */
+  align?: 'left' | 'right' | 'center';
+  /**
+   * Keep header text and cell content on one line (buttons, long headers).
+   * Pair action columns with `gridTrack: 'minmax(…px, auto)'` so the grid track does not shrink below buttons.
+   */
+  noWrap?: boolean;
   /** For 'badge' type: map value → CSS class suffix (e.g. { STAKE: 'stake', CLAIM: 'claim' }) */
   badgeMap?: Record<string, string>;
   /** Custom cell renderer — overrides type-based rendering */
@@ -32,6 +49,11 @@ export interface TableEvents {
 interface DataTableProps extends TableEvents {
   columns: ColumnConfig[];
   data: Record<string, unknown>[];
+  /**
+   * Embedded table only: no outer `stake-card`, no title/search/filters, no pagination.
+   * Use inside cards (e.g. lending markets). Set `pageSize` high or rely on no pagination when all rows fit.
+   */
+  bare?: boolean;
   loading?: boolean;
   pageSize?: number;
   title?: string;
@@ -40,7 +62,7 @@ interface DataTableProps extends TableEvents {
   filters?: FilterOption[];
   activeFilter?: string;
   emptyText?: string;
-  emptyIcon?: string;
+  emptyIcon?: ReactNode;
   /**
    * When true, `data` is one page from the server (no client slice).
    * Set `totalRowCount` to the API total for pagination. Client-side sorting is skipped; use `onSort` to refetch.
@@ -103,13 +125,13 @@ function Cell({ col, value, row }: { col: ColumnConfig; value: unknown; row: Rec
           onClick={() => navigator.clipboard.writeText(str).then(() => toast.success('Copied!'))}
           style={{
             background: 'none', border: 'none', cursor: 'pointer',
-            color: '#818cf8', fontSize: 13, fontFamily: 'monospace',
+            color: '#CE6DE4', fontSize: 13, fontFamily: 'monospace',
             display: 'flex', alignItems: 'center', gap: 4, padding: 0,
           }}
           title={str}
         >
           {str.slice(0, 6)}…{str.slice(-4)}
-          <span style={{ fontSize: 11 }}>📋</span>
+          <Copy size={11} />
         </button>
       );
 
@@ -136,6 +158,7 @@ function SortIcon({ active, dir }: { active: boolean; dir: 'asc' | 'desc' }) {
 export default function DataTable({
   columns,
   data,
+  bare = false,
   loading = false,
   pageSize = 5,
   title,
@@ -144,7 +167,7 @@ export default function DataTable({
   filters,
   activeFilter,
   emptyText = 'No data found',
-  emptyIcon = '📭',
+  emptyIcon = <Inbox size={32} strokeWidth={1.5} />,
   serverPaginated = false,
   totalRowCount,
   initialSort,
@@ -196,7 +219,16 @@ export default function DataTable({
     serverPaginated && typeof totalRowCount === 'number' ? totalRowCount : sorted.length;
 
   const totalPages = Math.max(1, Math.ceil(effectiveTotal / pageSize));
-  const paginated = serverPaginated ? sorted : sorted.slice((page - 1) * pageSize, page * pageSize);
+  const paginated = bare
+    ? sorted
+    : serverPaginated
+      ? sorted
+      : sorted.slice((page - 1) * pageSize, page * pageSize);
+
+  const gridCols = columns.map(c => c.gridTrack ?? '1fr').join(' ');
+  const headPad = bare ? '10px 20px' : '8px 24px';
+  const rowPad  = bare ? '14px 20px' : '14px 24px';
+  const rowMargin = bare ? '0' : '0 8px';
 
   const handleSort = (key: string) => {
     const newDir = sortKey === key && sortDir === 'asc' ? 'desc' : 'asc';
@@ -230,105 +262,41 @@ export default function DataTable({
   const showFrom = effectiveTotal === 0 ? 0 : (page - 1) * pageSize + 1;
   const showTo = Math.min(page * pageSize, effectiveTotal);
 
-  return (
-    <div className="stake-card" style={{ padding: '24px 0', overflow: 'hidden' }}>
-
-      {/* ── Header ── */}
-      <div style={{ padding: '0 24px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          {title && <div style={{ fontWeight: 700, fontSize: 16 }}>{title}</div>}
-          {subtitle && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{subtitle}</div>}
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* Search */}
-          {searchable && (
-            <div style={{ position: 'relative' }}>
-              <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 13, pointerEvents: 'none' }}>
-                🔍
-              </span>
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={e => handleSearch(e.target.value)}
-                placeholder="Search..."
-                style={{
-                  background: 'rgba(13,17,23,0.6)',
-                  border: '1px solid var(--stake-border)',
-                  borderRadius: 8,
-                  padding: '6px 10px 6px 28px',
-                  color: 'var(--text-primary)',
-                  fontSize: 13,
-                  outline: 'none',
-                  width: 180,
-                  transition: 'border-color 0.2s',
-                }}
-                onFocus={e => (e.target.style.borderColor = 'var(--stake-indigo)')}
-                onBlur={e => (e.target.style.borderColor = 'var(--stake-border)')}
-              />
-            </div>
-          )}
-
-          {/* Filter chips */}
-          {filters && (
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {filters.map(f => (
-                <button
-                  key={f.key}
-                  className={`filter-chip${activeFilter === f.key ? ' active' : ''}`}
-                  onClick={() => onFilterChange?.(f.key)}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Clear */}
-          {onClear && (searchQuery || sortKey || (activeFilter && activeFilter !== filters?.[0]?.key)) && (
-            <button
-              onClick={handleClear}
-              style={{
-                background: 'none', border: '1px solid var(--stake-border)', borderRadius: 8,
-                padding: '5px 10px', fontSize: 12, color: 'var(--text-secondary)',
-                cursor: 'pointer', transition: 'border-color 0.2s, color 0.2s',
-              }}
-              onMouseEnter={e => { (e.target as HTMLButtonElement).style.borderColor = 'var(--accent-danger)'; (e.target as HTMLButtonElement).style.color = 'var(--accent-danger)'; }}
-              onMouseLeave={e => { (e.target as HTMLButtonElement).style.borderColor = 'var(--stake-border)'; (e.target as HTMLButtonElement).style.color = 'var(--text-secondary)'; }}
-            >
-              ✕ Clear
-            </button>
-          )}
-        </div>
-      </div>
-
+  const tableSection = (
+    <>
       {/* ── Table ── */}
       <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' } as object}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 520 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: bare ? 480 : 520 }}>
           {/* Head */}
           <thead>
             <tr style={{
               display: 'grid',
-              gridTemplateColumns: `repeat(${columns.length}, 1fr)`,
-              padding: '8px 24px',
+              gridTemplateColumns: gridCols,
+              padding: headPad,
               fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
-              letterSpacing: '0.07em', color: 'var(--text-secondary)',
+              letterSpacing: bare ? '0.06em' : '0.07em',
+              color: 'var(--text-secondary)',
+              borderBottom: bare ? '1px solid var(--border)' : undefined,
             }}>
               {columns.map(col => (
                 <th
                   key={col.key}
                   style={{
-                    textAlign: 'left', fontWeight: 700, padding: 0,
-                    cursor: col.sortable ? 'pointer' : 'default',
+                    textAlign: col.align === 'right' ? 'right' : col.align === 'center' ? 'center' : 'left',
+                    fontWeight: 700, padding: 0,
+                    cursor: col.sortable && !bare ? 'pointer' : 'default',
                     userSelect: 'none',
                     display: 'flex', alignItems: 'center',
+                    justifyContent: col.align === 'right' ? 'flex-end' : col.align === 'center' ? 'center' : 'flex-start',
                     transition: 'color 0.15s',
                     color: sortKey === col.key ? 'var(--text-primary)' : undefined,
+                    whiteSpace: col.noWrap ? 'nowrap' : undefined,
+                    minWidth: col.noWrap ? 'min-content' : undefined,
                   }}
-                  onClick={() => col.sortable && handleSort(col.key)}
+                  onClick={() => !bare && col.sortable && handleSort(col.key)}
                 >
-                  {col.label}
-                  {col.sortable && (
+                  {col.labelNode ?? col.label}
+                  {col.sortable && !bare && (
                     <SortIcon active={sortKey === col.key} dir={sortKey === col.key ? sortDir : 'asc'} />
                   )}
                 </th>
@@ -336,24 +304,27 @@ export default function DataTable({
             </tr>
           </thead>
 
-          {/* Divider */}
-          <tbody>
-            <tr><td colSpan={columns.length} style={{ padding: 0 }}>
-              <div style={{ borderTop: '1px solid rgba(31,41,55,0.4)', margin: '0 24px' }} />
-            </td></tr>
+          {/* Divider (non-bare only — bare uses thead border) */}
+          {!bare && (
+            <tbody>
+              <tr><td colSpan={columns.length} style={{ padding: 0 }}>
+                <div style={{ borderTop: '1px solid rgba(31,41,55,0.4)', margin: '0 24px' }} />
+              </td></tr>
+            </tbody>
+          )}
 
-            {/* Rows */}
+          <tbody>
             {loading ? (
               Array.from({ length: 3 }).map((_, i) => (
-                <tr key={i}><td colSpan={columns.length} style={{ padding: '12px 24px' }}>
+                <tr key={i}><td colSpan={columns.length} style={{ padding: bare ? '12px 20px' : '12px 24px' }}>
                   <div className="skeleton" style={{ height: 14, width: '100%' }} />
                 </td></tr>
               ))
             ) : paginated.length === 0 ? (
               <tr><td colSpan={columns.length}>
-                <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
-                  <div style={{ fontSize: 32, marginBottom: 8 }}>{emptyIcon}</div>
-                  <div style={{ fontSize: 14 }}>{emptyText}</div>
+                <div style={{ textAlign: 'center', padding: bare ? '28px 20px' : '40px', color: 'var(--text-secondary)' }}>
+                  {!bare && <div style={{ display: 'flex', justifyContent: 'center', color: 'var(--text-secondary)', marginBottom: 8 }}>{emptyIcon}</div>}
+                  <div style={{ fontSize: bare ? 13 : 14 }}>{emptyText}</div>
                 </div>
               </td></tr>
             ) : (
@@ -366,19 +337,33 @@ export default function DataTable({
                   }
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: `repeat(${columns.length}, 1fr)`,
-                    padding: '14px 24px',
+                    gridTemplateColumns: gridCols,
+                    padding: rowPad,
                     fontSize: 13,
-                    background: i % 2 === 0 ? 'rgba(17,24,39,0.3)' : 'transparent',
+                    background: bare
+                      ? 'transparent'
+                      : (i % 2 === 0 ? 'rgba(17,24,39,0.3)' : 'transparent'),
                     transition: 'background 0.15s',
-                    margin: '0 8px',
-                    borderRadius: 8,
+                    margin: rowMargin,
+                    borderRadius: bare ? 0 : 8,
+                    borderBottom: bare ? '1px solid var(--border)' : undefined,
                   }}
-                  onMouseEnter={e => ((e.currentTarget as HTMLElement).style.background = 'rgba(31,41,55,0.5)')}
-                  onMouseLeave={e => ((e.currentTarget as HTMLElement).style.background = i % 2 === 0 ? 'rgba(17,24,39,0.3)' : 'transparent')}
+                  onMouseEnter={bare ? undefined : e => ((e.currentTarget as HTMLElement).style.background = 'rgba(31,41,55,0.5)')}
+                  onMouseLeave={bare ? undefined : e => ((e.currentTarget as HTMLElement).style.background = i % 2 === 0 ? 'rgba(17,24,39,0.3)' : 'transparent')}
                 >
                   {columns.map(col => (
-                    <td key={col.key} style={{ padding: 0, display: 'flex', alignItems: 'center' }}>
+                    <td
+                      key={col.key}
+                      style={{
+                        padding: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: col.align === 'right' ? 'flex-end' : col.align === 'center' ? 'center' : 'flex-start',
+                        flexWrap: col.noWrap ? 'nowrap' : undefined,
+                        whiteSpace: col.noWrap ? 'nowrap' : undefined,
+                        minWidth: col.noWrap ? 'min-content' : undefined,
+                      }}
+                    >
                       <Cell col={col} value={row[col.key]} row={row} />
                     </td>
                   ))}
@@ -390,7 +375,7 @@ export default function DataTable({
       </div>
 
       {/* ── Pagination ── */}
-      {effectiveTotal > pageSize && (
+      {!bare && effectiveTotal > pageSize && (
         <div style={{
           padding: '16px 24px 0',
           borderTop: '1px solid rgba(31,41,55,0.4)',
@@ -419,7 +404,6 @@ export default function DataTable({
               ← Prev
             </button>
 
-            {/* Page numbers */}
             {Array.from({ length: totalPages }, (_, i) => i + 1)
               .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
               .reduce<(number | '...')[]>((acc, p, idx, arr) => {
@@ -468,6 +452,101 @@ export default function DataTable({
           </div>
         </div>
       )}
+    </>
+  );
+
+  if (bare) {
+    return <div style={{ width: '100%' }}>{tableSection}</div>;
+  }
+
+  return (
+    <div className="stake-card" style={{ padding: '24px 0', overflow: 'hidden' }}>
+
+      {/* ── Header ── */}
+      <div style={{ padding: '0 24px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          {title && <div style={{ fontWeight: 700, fontSize: 16 }}>{title}</div>}
+          {subtitle && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{subtitle}</div>}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Search */}
+          {searchable && (
+            <div style={{ position: 'relative' }}>
+              <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  left: 10,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  width: 16,
+                  height: 16,
+                  fill: 'currentColor',
+                  color: 'var(--text-muted)',
+                  opacity: 0.75,
+                  pointerEvents: 'none',
+                }}
+              >
+                <path d="M10.5 3a7.5 7.5 0 1 1-5.3 12.8l-3.6 3.6a1 1 0 0 1-1.4-1.4l3.6-3.6A7.5 7.5 0 0 1 10.5 3zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z" />
+              </svg>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={e => handleSearch(e.target.value)}
+                placeholder="Search..."
+                style={{
+                  background: 'var(--bg-input)',
+                  border: '1px solid var(--stake-border)',
+                  borderRadius: 8,
+                  padding: '6px 10px 6px 28px',
+                  color: 'var(--text-primary)',
+                  fontSize: 13,
+                  outline: 'none',
+                  width: 180,
+                  transition: 'border-color 0.2s',
+                }}
+                onFocus={e => (e.target.style.borderColor = 'var(--stake-indigo)')}
+                onBlur={e => (e.target.style.borderColor = 'var(--stake-border)')}
+              />
+            </div>
+          )}
+
+          {/* Filter chips */}
+          {filters && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {filters.map(f => (
+                <button
+                  key={f.key}
+                  className={`filter-chip${activeFilter === f.key ? ' active' : ''}`}
+                  onClick={() => onFilterChange?.(f.key)}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Clear */}
+          {onClear && (searchQuery || sortKey || (activeFilter && activeFilter !== filters?.[0]?.key)) && (
+            <button
+              onClick={handleClear}
+              style={{
+                background: 'none', border: '1px solid var(--stake-border)', borderRadius: 8,
+                padding: '5px 10px', fontSize: 12, color: 'var(--text-secondary)',
+                cursor: 'pointer', transition: 'border-color 0.2s, color 0.2s',
+              }}
+              onMouseEnter={e => { (e.target as HTMLButtonElement).style.borderColor = 'var(--accent-danger)'; (e.target as HTMLButtonElement).style.color = 'var(--accent-danger)'; }}
+              onMouseLeave={e => { (e.target as HTMLButtonElement).style.borderColor = 'var(--stake-border)'; (e.target as HTMLButtonElement).style.color = 'var(--text-secondary)'; }}
+            >
+              ✕ Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      {tableSection}
     </div>
   );
 }

@@ -24,7 +24,7 @@ import { getSqrtRatioAtTick } from '../../utils/tickMath';
 import { devLog, devError } from '../../utils/devLog';
 import { collectViemErrorText } from '../../utils/viemErrors';
 import { formatBigintTokenAmount } from '../../utils/formatUtils';
-import { ammWagmiConfig, getAmmPublicClient } from './ammClient';
+import { ammWagmiConfig, getPublicClient, submitAmmTransaction } from './ammClient';
 import { fetchTokenDecimals, mergeTokenDecimals } from './tokenMetadata';
 
 const config = ammWagmiConfig;
@@ -44,9 +44,7 @@ function swapSlippageBps(slippagePercent: number): bigint {
 function normalizeSwapError(err: unknown): Error {
   const text = collectViemErrorText(err);
   if (/Internal JSON-RPC error|InternalRpcError/i.test(text)) {
-    return new Error(
-      'RPC hid the revert reason. Common fixes: raise slippage (try 3–5%), ensure the pool has liquidity, or set a different Amoy endpoint (VITE_POLYGON_AMOY_RPC) and retry.'
-    );
+    return new Error('Swap failed. Try a higher slippage or a smaller amount.');
   }
   if (/Too little received|STF|Insufficient output amount|IIA/i.test(text)) {
     return new Error(
@@ -54,9 +52,10 @@ function normalizeSwapError(err: unknown): Error {
     );
   }
   if (/execution reverted/i.test(text)) {
-    return new Error(
-      'Swap reverted on-chain. The pool likely has no liquidity for this pair, or the RPC did not return a reason. Verify liquidity exists for this pair and fee tier, or try a different RPC endpoint (VITE_POLYGON_AMOY_RPC).'
-    );
+    return new Error('Swap failed. The pool may not have enough liquidity.');
+  }
+  if (/User rejected|User denied|denied transaction|rejected the request|4001/i.test(text)) {
+    return new Error('User rejected the request');
   }
   if (err instanceof Error) return err;
   return new Error(text || 'Swap failed');
@@ -68,23 +67,19 @@ function normalizeApprovalError(err: unknown): Error {
     return new Error('Token approval was rejected in your wallet.');
   }
   if (/insufficient funds|insufficient balance|exceeds balance/i.test(text)) {
-    return new Error(
-      'Not enough Amoy POL for gas. Fund the wallet with testnet POL or switch RPC (VITE_POLYGON_AMOY_RPC) and retry.',
-    );
+    return new Error('Not enough POL to pay for gas.');
   }
   if (/Internal JSON-RPC error|InternalRpcError|execution reverted/i.test(text)) {
-    return new Error(
-      'ERC20 approve failed (often gas/RPC or a stuck allowance). Retry, or revoke the token for the router in your wallet then swap again.',
-    );
+    return new Error('Token approval failed. Please try again.');
   }
-  if (err instanceof Error) return new Error(`Token approval failed: ${err.message}`);
-  return new Error(text || 'Token approval failed');
+  if (err instanceof Error) return new Error('Token approval failed. Please try again.');
+  return new Error('Token approval failed. Please try again.');
 }
 
 /** Simulate then submit approve; waits for receipt so swap runs with updated allowance. */
 async function writeApproveWithSimulation(
   walletClient: NonNullable<Awaited<ReturnType<typeof getWalletClient>>>,
-  pc: ReturnType<typeof getAmmPublicClient>,
+  pc: ReturnType<typeof getPublicClient>,
   account: Address,
   token: Address,
   spender: Address,
@@ -101,7 +96,9 @@ async function writeApproveWithSimulation(
       maxFeePerGas: GAS.maxFeePerGas,
       maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
     });
-    const hash = await walletClient.writeContract(request);
+    const hash = await submitAmmTransaction(account, nonce =>
+      walletClient.writeContract({ ...request, nonce }),
+    );
     const receipt = await waitForTransactionReceipt(config, { hash, chainId: CHAIN_ID });
     if (receipt.status !== 'success') {
       throw new Error('Approve transaction reverted on-chain.');
@@ -113,7 +110,7 @@ async function writeApproveWithSimulation(
   }
 }
 
-export { getAmmPublicClient } from './ammClient';
+export { getPublicClient } from './ammClient';
 
 async function tokenFromAddress(addr: string): Promise<import('../../types').Token> {
   const listed = getListedTokenMeta(addr);
@@ -133,7 +130,7 @@ export async function getPool(
   tokenB: string,
   fee: number
 ): Promise<Pool | null> {
-  const pc = getAmmPublicClient();
+  const pc = getPublicClient();
   const poolAddr = (await readContract(pc, {
     address: CONTRACTS.Factory as Address,
     abi: factoryAbi,
@@ -199,10 +196,11 @@ export async function ensurePoolCreatedAndInitialized(
   tokenB: string,
   fee: number,
   sqrtPriceX96: bigint,
-): Promise<void> {
+): Promise<{ createHash?: `0x${string}`; initHash?: `0x${string}` }> {
   if (sqrtPriceX96 <= 0n) throw new Error('Starting price must be positive.');
+  const result: { createHash?: `0x${string}`; initHash?: `0x${string}` } = {};
 
-  const pc = getAmmPublicClient();
+  const pc = getPublicClient();
   const wallet = await getWalletClient(config, { chainId: CHAIN_ID });
   const { address: user } = getAccount(config);
   if (!wallet || !user) throw new Error(`Connect a wallet on the AMM network (chain ${CHAIN_ID}).`);
@@ -216,14 +214,20 @@ export async function ensurePoolCreatedAndInitialized(
 
   if (!poolAddr || poolAddr === zeroAddress) {
     devLog('tx/pool', 'createPool', { tokenA, tokenB, fee });
-    const hash = await writeContract(wallet, {
-      address: CONTRACTS.Factory as Address,
-      abi: factoryAbi,
-      functionName: 'createPool',
-      args: [tokenA as Address, tokenB as Address, fee],
-    });
+    const hash = await submitAmmTransaction(user, nonce =>
+      writeContract(wallet, {
+        address: CONTRACTS.Factory as Address,
+        abi: factoryAbi,
+        functionName: 'createPool',
+        args: [tokenA as Address, tokenB as Address, fee],
+        nonce,
+        maxFeePerGas: GAS.maxFeePerGas,
+        maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
+      }),
+    );
     await waitForTransactionReceipt(config, { hash, chainId: CHAIN_ID });
     devLog('tx/pool', 'createPool confirmed', { hash });
+    result.createHash = hash;
     poolAddr = (await readContract(pc, {
       address: CONTRACTS.Factory as Address,
       abi: factoryAbi,
@@ -240,15 +244,22 @@ export async function ensurePoolCreatedAndInitialized(
 
   if (slot0[0] === 0n) {
     devLog('tx/pool', 'initialize', { poolAddr, sqrtPriceX96: sqrtPriceX96.toString() });
-    const hash = await writeContract(wallet, {
-      address: poolAddr,
-      abi: poolAbi,
-      functionName: 'initialize',
-      args: [sqrtPriceX96],
-    });
+    const hash = await submitAmmTransaction(user, nonce =>
+      writeContract(wallet, {
+        address: poolAddr,
+        abi: poolAbi,
+        functionName: 'initialize',
+        args: [sqrtPriceX96],
+        nonce,
+        maxFeePerGas: GAS.maxFeePerGas,
+        maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
+      }),
+    );
     await waitForTransactionReceipt(config, { hash, chainId: CHAIN_ID });
     devLog('tx/pool', 'initialize confirmed', { hash });
+    result.initHash = hash;
   }
+  return result;
 }
 
 export async function getAllPools(): Promise<Pool[]> {
@@ -286,7 +297,7 @@ export async function getSwapQuote(params: SwapParams): Promise<SwapQuote | null
   const pool = await getPool(tokenIn.address, tokenOut.address, params.fee);
   if (!pool) return null;
 
-  const pc = getAmmPublicClient();
+  const pc = getPublicClient();
   const poolAddr = pool.address as Address;
   const [chainT0, sqrtPriceX96] = await Promise.all([
     readContract(pc, {
@@ -339,7 +350,7 @@ export async function getSwapQuote(params: SwapParams): Promise<SwapQuote | null
 }
 
 export async function getTokenBalance(tokenAddress: string, walletAddress: string): Promise<string> {
-  const pc = getAmmPublicClient();
+  const pc = getPublicClient();
   const bal = (await readContract(pc, {
     address: tokenAddress as Address,
     abi: erc20Abi,
@@ -355,7 +366,7 @@ export async function checkAllowance(
   ownerAddress: string,
   spenderAddress: string
 ): Promise<string> {
-  const pc = getAmmPublicClient();
+  const pc = getPublicClient();
   const a = (await readContract(pc, {
     address: tokenAddress as Address,
     abi: erc20Abi,
@@ -378,7 +389,7 @@ export async function approveToken(
   devLog('tx/approve', 'submitting', { tokenAddress, spenderAddress, chainId: CHAIN_ID });
   const hash = await writeApproveWithSimulation(
     walletClient,
-    getAmmPublicClient(),
+    getPublicClient(),
     user,
     tokenAddress as Address,
     spenderAddress as Address,
@@ -404,9 +415,17 @@ export async function executeSwap(params: SwapParams): Promise<{ hash: string }>
   if (!walletClient || !user) throw new Error(`Connect a wallet on the AMM network (chain ${CHAIN_ID}).`);
 
   const amountInWei = parseUnits(params.amountIn, tokenIn.decimals);
-  const pc = getAmmPublicClient();
+  const pc = getPublicClient();
 
   devLog('tx/swap', 'spot quote (UI only)', { amountInWei: amountInWei.toString(), quote });
+
+  // `liquidity()` is active liquidity at the current tick, not the sum of all
+  // deposited positions. Check it before requesting any token approval so an
+  // out-of-range pool cannot cause a needless wallet transaction.
+  const poolForLiq = await getPool(tokenIn.address, tokenOut.address, params.fee);
+  if (poolForLiq && BigInt(poolForLiq.liquidity) === 0n) {
+    throw new Error('Insufficient liquidity');
+  }
 
   const allowance = (await readContract(pc, {
     address: tokenIn.address as Address,
@@ -430,19 +449,6 @@ export async function executeSwap(params: SwapParams): Promise<{ hash: string }>
     }
     await writeApproveWithSimulation(walletClient, pc, user, tokenAddr, router, amountInWei);
     devLog('tx/swap', 'approve confirmed for exact swap amount', { amountInWei: amountInWei.toString() });
-  }
-
-  // Fail fast if the pool has no liquidity — the swap will always revert in that case.
-  const poolForLiq = await getPool(tokenIn.address, tokenOut.address, params.fee);
-  if (poolForLiq) {
-    const poolLiquidity = (await readContract(pc, {
-      address: poolForLiq.address as Address,
-      abi: poolAbi,
-      functionName: 'liquidity',
-    })) as bigint;
-    if (poolLiquidity === 0n) {
-      throw new Error('This pool has no liquidity. Add liquidity first before swapping.');
-    }
   }
 
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 1800);
@@ -502,7 +508,9 @@ export async function executeSwap(params: SwapParams): Promise<{ hash: string }>
       account: user,
       ...gasOverrides,
     });
-    hash = await walletClient.writeContract(request);
+    hash = await submitAmmTransaction(user, nonce =>
+      walletClient.writeContract({ ...request, nonce }),
+    );
   } catch (e) {
     devError('tx/swap', 'simulate/write exactInputSingle failed', e);
     throw normalizeSwapError(e);
@@ -515,7 +523,7 @@ export async function executeSwap(params: SwapParams): Promise<{ hash: string }>
 
 /** Used by position service for pooled amounts (same math as on-chain mint). */
 export async function readPoolSlot0(poolAddress: string): Promise<{ sqrtPriceX96: bigint; tick: number }> {
-  const slot = (await readContract(getAmmPublicClient(), {
+  const slot = (await readContract(getPublicClient(), {
     address: poolAddress as Address,
     abi: poolAbi,
     functionName: 'slot0',

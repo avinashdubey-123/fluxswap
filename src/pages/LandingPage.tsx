@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import React, { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import {
   motion,
@@ -9,8 +9,79 @@ import {
   useMotionValue,
 } from 'framer-motion';
 import { useAppKit, useAppKitAccount } from '@reown/appkit/react';
+import { Zap } from 'lucide-react';
 import TiltCard from '../components/common/TiltCard';
 import { formatAddress } from '../utils/formatUtils';
+
+/* ─── Scroll progress bar ────────────────────────────────────────────────── */
+function ScrollProgressBar() {
+  const { scrollYProgress } = useScroll();
+  const scaleX = useSpring(scrollYProgress, { stiffness: 200, damping: 30 });
+  return (
+    <motion.div
+      style={{
+        position: 'fixed', top: 0, left: 0, right: 0, height: 2,
+        background: 'linear-gradient(90deg, #6366f1, #8b5cf6, #06b6d4)',
+        transformOrigin: '0%',
+        scaleX,
+        zIndex: 999,
+        pointerEvents: 'none',
+      }}
+    />
+  );
+}
+
+/* ─── Floating background orbs ───────────────────────────────────────────── */
+interface OrbDef { x: string; y: string; size: number; color: string; duration: number; delay?: number; }
+function FloatingOrbs({ orbs }: { orbs: OrbDef[] }) {
+  return (
+    <>
+      {orbs.map((o, i) => (
+        <motion.div
+          key={i}
+          style={{
+            position: 'absolute', left: o.x, top: o.y,
+            width: o.size, height: o.size, borderRadius: '50%',
+            background: o.color, filter: `blur(${Math.min(Math.round(o.size * 0.25), 70)}px)`,
+            pointerEvents: 'none', zIndex: 0,
+          }}
+          animate={{
+            x: [0, 45, -25, 18, 0],
+            y: [0, -35, 22, -12, 0],
+            scale: [1, 1.1, 0.93, 1.05, 1],
+            opacity: [0.7, 1, 0.55, 0.9, 0.7],
+          }}
+          transition={{ duration: o.duration, delay: o.delay ?? 0, repeat: Infinity, ease: 'easeInOut' }}
+        />
+      ))}
+    </>
+  );
+}
+
+/* ─── Hero mouse spotlight ───────────────────────────────────────────────── */
+function HeroSpotlight() {
+  const [pos, setPos] = useState({ x: 50, y: 40 });
+  useEffect(() => {
+    const el = document.querySelector('.landing-hero-section') as HTMLElement | null;
+    if (!el) return;
+    const handler = (e: MouseEvent) => {
+      const rect = el.getBoundingClientRect();
+      setPos({
+        x: ((e.clientX - rect.left) / rect.width) * 100,
+        y: ((e.clientY - rect.top) / rect.height) * 100,
+      });
+    };
+    el.addEventListener('mousemove', handler, { passive: true });
+    return () => el.removeEventListener('mousemove', handler);
+  }, []);
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0,
+      background: `radial-gradient(circle 600px at ${pos.x}% ${pos.y}%, rgba(99,102,241,0.08) 0%, transparent 70%)`,
+      transition: 'background 0.08s linear',
+    }} />
+  );
+}
 
 /* ─── Particles ──────────────────────────────────────────────────────────── */
 function ParticlesCanvas() {
@@ -49,7 +120,7 @@ function ParticlesCanvas() {
       for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
         const dx = pts[i].x - pts[j].x; const dy = pts[i].y - pts[j].y;
         const d = Math.sqrt(dx * dx + dy * dy);
-        if (d < 130) { ctx.strokeStyle = `rgba(99,102,241,${(1 - d / 130) * 0.22})`; ctx.lineWidth = 0.7; ctx.beginPath(); ctx.moveTo(pts[i].x, pts[i].y); ctx.lineTo(pts[j].x, pts[j].y); ctx.stroke(); }
+        if (d < 130) { ctx.strokeStyle = `rgba(188,64,221,${(1 - d / 130) * 0.22})`; ctx.lineWidth = 0.7; ctx.beginPath(); ctx.moveTo(pts[i].x, pts[i].y); ctx.lineTo(pts[j].x, pts[j].y); ctx.stroke(); }
       }
       pts.forEach(p => { ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fillStyle = `rgba(139,92,246,${p.a})`; ctx.fill(); });
       raf = requestAnimationFrame(draw);
@@ -65,24 +136,24 @@ function AppMockup({ scale = 1 }: { scale?: number }) {
   return (
     <div style={{
       width: 340 * scale, background: 'linear-gradient(145deg, rgba(22,30,46,0.97), rgba(13,17,31,0.99))',
-      border: '1px solid rgba(99,102,241,0.28)', borderRadius: 24 * scale, padding: 24 * scale,
-      boxShadow: '0 48px 96px rgba(0,0,0,0.7), 0 0 80px rgba(99,102,241,0.18), inset 0 1px 0 rgba(255,255,255,0.06)',
+      border: '1px solid rgba(188,64,221,0.28)', borderRadius: 24 * scale, padding: 24 * scale,
+      boxShadow: '0 48px 96px rgba(0,0,0,0.7), 0 0 80px rgba(188,64,221,0.18), inset 0 1px 0 rgba(255,255,255,0.06)',
       backdropFilter: 'blur(24px)', flexShrink: 0,
     }}>
       {/* Header row */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 * scale }}>
         <span style={{ fontSize: 14 * scale, fontWeight: 800, color: '#e6edf3' }}>Stake Tokens</span>
-        <span style={{ background: 'rgba(99,102,241,0.18)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 8, padding: `3px ${10 * scale}px`, fontSize: 11 * scale, fontWeight: 700, color: '#818cf8' }}>12% APR</span>
+        <span style={{ background: 'rgba(188,64,221,0.18)', border: '1px solid rgba(188,64,221,0.3)', borderRadius: 8, padding: `3px ${10 * scale}px`, fontSize: 11 * scale, fontWeight: 700, color: '#CE6DE4' }}>12% APR</span>
       </div>
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 4, background: 'rgba(10,14,26,0.8)', borderRadius: 10, padding: 4, marginBottom: 18 * scale }}>
-        <div style={{ flex: 1, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', borderRadius: 7, textAlign: 'center', fontSize: 12 * scale, fontWeight: 700, color: '#fff', paddingTop: 8 * scale, paddingBottom: 8 * scale }}>Stake</div>
+        <div style={{ flex: 1, background: 'linear-gradient(135deg,#BC40DD,#A855F7)', borderRadius: 7, textAlign: 'center', fontSize: 12 * scale, fontWeight: 700, color: '#fff', paddingTop: 8 * scale, paddingBottom: 8 * scale }}>Stake</div>
         <div style={{ flex: 1, textAlign: 'center', fontSize: 12 * scale, fontWeight: 600, color: '#9ca3af', paddingTop: 8 * scale, paddingBottom: 8 * scale }}>Unstake</div>
       </div>
       {/* Token selector */}
       <div style={{ background: 'rgba(10,14,26,0.6)', border: '1px solid rgba(55,65,100,0.4)', borderRadius: 12, padding: `${12 * scale}px ${14 * scale}px`, marginBottom: 10 * scale, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 26 * scale, height: 26 * scale, borderRadius: '50%', background: 'rgba(99,102,241,0.2)', border: '1px solid rgba(99,102,241,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9 * scale, fontWeight: 800, color: '#818cf8' }}>TK</div>
+          <div style={{ width: 26 * scale, height: 26 * scale, borderRadius: '50%', background: 'rgba(188,64,221,0.2)', border: '1px solid rgba(188,64,221,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9 * scale, fontWeight: 800, color: '#CE6DE4' }}>TK</div>
           <span style={{ fontSize: 13 * scale, fontWeight: 700, color: '#e6edf3' }}>TKA</span>
         </div>
         <svg width={14 * scale} height={14 * scale} viewBox="0 0 24 24" fill="none" stroke="rgba(156,163,175,0.5)" strokeWidth="2" strokeLinecap="round"><polyline points="6 9 12 15 18 9" /></svg>
@@ -90,7 +161,7 @@ function AppMockup({ scale = 1 }: { scale?: number }) {
       {/* Amount */}
       <div style={{ background: 'rgba(10,14,26,0.6)', border: '1px solid rgba(55,65,100,0.4)', borderRadius: 12, padding: `${13 * scale}px ${14 * scale}px`, marginBottom: 8 * scale, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: 17 * scale, fontWeight: 700, color: 'rgba(156,163,175,0.45)' }}>0.0</span>
-        <div style={{ background: 'rgba(99,102,241,0.14)', border: '1px solid rgba(99,102,241,0.28)', borderRadius: 6, padding: `3px ${9 * scale}px`, fontSize: 10 * scale, fontWeight: 700, color: '#818cf8' }}>MAX</div>
+        <div style={{ background: 'rgba(188,64,221,0.14)', border: '1px solid rgba(188,64,221,0.28)', borderRadius: 6, padding: `3px ${9 * scale}px`, fontSize: 10 * scale, fontWeight: 700, color: '#CE6DE4' }}>MAX</div>
       </div>
       {/* Balance */}
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 * scale, color: '#9ca3af', marginBottom: 14 * scale }}>
@@ -98,7 +169,7 @@ function AppMockup({ scale = 1 }: { scale?: number }) {
         <span style={{ background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.25)', borderRadius: 999, padding: '2px 8px', color: '#10b981', fontSize: 9 * scale, fontWeight: 700 }}>New Stake Available</span>
       </div>
       {/* Rewards preview */}
-      <div style={{ background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.18)', borderRadius: 12, padding: `${11 * scale}px ${13 * scale}px`, marginBottom: 14 * scale }}>
+      <div style={{ background: 'rgba(188,64,221,0.08)', border: '1px solid rgba(188,64,221,0.18)', borderRadius: 12, padding: `${11 * scale}px ${13 * scale}px`, marginBottom: 14 * scale }}>
         <div style={{ fontSize: 9 * scale, color: '#9ca3af', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>Rewards Preview</div>
         <div style={{ display: 'flex', gap: 16, fontSize: 11 * scale, color: '#9ca3af' }}>
           <span>Daily: <strong style={{ color: '#10b981' }}>0.0000 TKA</strong></span>
@@ -106,7 +177,7 @@ function AppMockup({ scale = 1 }: { scale?: number }) {
         </div>
       </div>
       {/* CTA */}
-      <div style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', borderRadius: 13 * scale, padding: `${13 * scale}px`, textAlign: 'center', fontSize: 14 * scale, fontWeight: 800, color: '#fff', letterSpacing: '0.01em' }}>
+      <div style={{ background: '#BC40DD', borderRadius: 999, padding: `${13 * scale}px`, textAlign: 'center', fontSize: 14 * scale, fontWeight: 800, color: '#fff', letterSpacing: '0.06em', textTransform: 'uppercase', fontFamily: 'var(--font-display)' }}>
         Stake Tokens
       </div>
     </div>
@@ -135,7 +206,7 @@ function Counter({ to, prefix = '', suffix = '', decimals = 0 }: { to: number; p
 const fadeUp = { hidden: { opacity: 0, y: 32 }, show: { opacity: 1, y: 0, transition: { duration: 0.65, ease: [0.22, 1, 0.36, 1] as const } } };
 const stagger = { hidden: {}, show: { transition: { staggerChildren: 0.11 } } };
 
-const LANDING_NAV_LINKS = ['Stake', 'Swap', 'Pool', 'Positions'] as const;
+const LANDING_NAV_LINKS = ['Stake', 'Swap', 'Pool', 'Positions', 'Lend'] as const;
 
 /* ─── Nav ────────────────────────────────────────────────────────────────── */
 function Nav() {
@@ -184,14 +255,17 @@ function Nav() {
           display: 'flex', alignItems: 'center',
           backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
           background: scrolled ? 'rgba(10,14,26,0.88)' : 'transparent',
-          borderBottom: scrolled ? '1px solid rgba(55,65,100,0.4)' : 'none',
+          borderBottom: `1px solid ${scrolled ? 'rgba(55,65,100,0.4)' : 'transparent'}`,
           transition: 'background 0.3s, border-color 0.3s',
         }}
       >
         <div className="landing-nav-inner">
           <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', flexShrink: 0 }} onClick={() => setMenuOpen(false)}>
-            <div style={{ width: 34, height: 34, borderRadius: 10, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 800, color: 'white' }}>FS</div>
-            <span style={{ fontWeight: 800, fontSize: 17, color: '#f9fafb' }}>FLUX <span style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>SWAP</span></span>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg,#BC40DD,#A855F7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 800, color: 'white', letterSpacing: '0.02em', flexShrink: 0 }}>FS</div>
+            <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
+              <span style={{ fontWeight: 800, fontSize: 16, color: '#ffffff', letterSpacing: '0.04em' }}>FLUX <span style={{ color: '#BC40DD' }}>SWAP</span></span>
+              <span style={{ fontSize: 10, color: '#A855F7', fontWeight: 500, letterSpacing: '0.06em' }}>network</span>
+            </div>
           </Link>
           <div className="landing-nav-links">
             {LANDING_NAV_LINKS.map(l => (
@@ -208,18 +282,18 @@ function Nav() {
             <motion.button
               type="button"
               className="landing-nav-connect"
-              whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}
+              whileHover={{ scale: 1.04, transition: { duration: 0.15, ease: 'easeOut' } }} whileTap={{ scale: 0.97 }}
               onClick={() => open()}
               style={{
-                background: isConnected
-                  ? 'rgba(17,24,39,0.85)'
-                  : 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+                background: isConnected ? 'rgba(8,11,20,0.8)' : '#BC40DD',
                 color: '#fff',
-                border: isConnected ? '1px solid rgba(55,65,100,0.55)' : 'none',
-                borderRadius: 12,
-                padding: '9px 18px',
+                border: isConnected ? '1px solid rgba(188,64,221,0.35)' : 'none',
+                borderRadius: 999,
+                padding: '9px 22px',
                 fontSize: 13,
                 fontWeight: 700,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
@@ -293,30 +367,42 @@ function Hero() {
 
   return (
     <section
-      className="landing-stack-layer landing-stack-z1"
+      className="landing-hero-section"
       style={{
         display: 'flex', alignItems: 'center',
         overflow: 'hidden',
-        background: 'radial-gradient(ellipse 80% 60% at 60% 0%, rgba(99,102,241,0.14) 0%, transparent 70%), var(--bg-primary)',
+        background: 'radial-gradient(ellipse 80% 60% at 60% 0%, rgba(188,64,221,0.14) 0%, transparent 70%), var(--bg-primary)',
       }}
     >
       <ParticlesCanvas />
       {/* Glow blobs */}
       {[
-        { top: '10%', left: '5%', w: 380, h: 380, color: 'rgba(99,102,241,0.1)', blur: 90 },
+        { top: '10%', left: '5%', w: 380, h: 380, color: 'rgba(188,64,221,0.1)', blur: 90 },
         { top: '50%', right: '2%', w: 300, h: 300, color: 'rgba(139,92,246,0.09)', blur: 80 },
         { top: '65%', left: '35%', w: 220, h: 220, color: 'rgba(16,185,129,0.06)', blur: 70 },
       ].map((b, i) => (
         <div key={i} style={{ position: 'absolute', top: b.top, left: b.left, right: b.right as string | undefined, width: b.w, height: b.h, background: b.color, borderRadius: '50%', filter: `blur(${b.blur}px)`, pointerEvents: 'none' }} />
       ))}
+      <HeroSpotlight />
+      <FloatingOrbs orbs={[
+        { x: '3%',  y: '10%', size: 280, color: 'rgba(99,102,241,0.12)',  duration: 12 },
+        { x: '72%', y: '40%', size: 220, color: 'rgba(139,92,246,0.10)', duration: 14, delay: 2 },
+        { x: '35%', y: '55%', size: 180, color: 'rgba(16,185,129,0.07)', duration: 10, delay: 4 },
+      ]} />
 
       <div className="landing-hero-inner landing-hero-row">
 
         {/* ── Left: copy ── */}
         <motion.div className="landing-hero-copy" style={{ y: textY, opacity: textOp }}>
           <motion.div initial={{ opacity: 0, scale: 0.85 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5, delay: 0.1 }} style={{ marginBottom: 28 }}>
-            <span style={{ background: 'rgba(99,102,241,0.14)', border: '1px solid rgba(99,102,241,0.34)', color: '#818cf8', borderRadius: 999, padding: '6px 16px', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em' }}>
-              ⚡ NOW LIVE ON TESTNET
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(99,102,241,0.14)', border: '1px solid rgba(99,102,241,0.34)', color: '#818cf8', borderRadius: 999, padding: '6px 16px', fontSize: 12, fontWeight: 700, letterSpacing: '0.06em' }}>
+              <span style={{ position: 'relative', display: 'inline-flex' }}>
+                <span className="zap-pulse-ring">
+                  <Zap size={13} />
+                </span>
+                <Zap size={13} />
+              </span>
+              NOW LIVE ON TESTNET
             </span>
           </motion.div>
 
@@ -326,7 +412,7 @@ function Hero() {
             style={{ fontSize: 'clamp(38px, 5.5vw, 72px)', fontWeight: 900, lineHeight: 1.07, letterSpacing: '-0.04em', margin: '0 0 20px', color: '#e6edf3' }}
           >
             The Future of{' '}
-            <span style={{ background: 'linear-gradient(135deg,#6366f1 0%,#8b5cf6 50%,#06b6d4 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
+            <span style={{ background: 'linear-gradient(135deg,#BC40DD 0%,#A855F7 50%,#06b6d4 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
               DeFi
             </span>{' '}
             is Here.
@@ -338,7 +424,7 @@ function Hero() {
             className="landing-hero-lead"
             style={{ fontSize: 'clamp(15px, 2vw, 19px)', color: '#9ca3af', maxWidth: 440, margin: '0 0 40px', lineHeight: 1.7 }}
           >
-            Stake, swap and provide liquidity — all in one protocol. Earn up to{' '}
+            Stake, swap, provide liquidity, and lend — all in one protocol. Earn up to{' '}
             <span style={{ color: '#10b981', fontWeight: 700 }}>12% APR</span>{' '}
             with audited, transparent smart contracts.
           </motion.p>
@@ -346,14 +432,18 @@ function Hero() {
           <motion.div className="landing-hero-ctas" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, delay: 0.5 }}
             style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
             <Link to="/stake">
-              <motion.button whileHover={{ scale: 1.05, boxShadow: '0 0 36px rgba(99,102,241,0.55)' }} whileTap={{ scale: 0.97 }}
-                style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff', border: 'none', borderRadius: 14, padding: '14px 34px', fontSize: 16, fontWeight: 800, cursor: 'pointer' }}>
+              <motion.div
+                whileHover={{ scale: 1.05, boxShadow: '0 0 36px rgba(188,64,221,0.55)', transition: { duration: 0.15, ease: 'easeOut' } }} whileTap={{ scale: 0.97 }}
+                animate={{ boxShadow: ['0 0 20px rgba(99,102,241,0.3)', '0 0 48px rgba(99,102,241,0.7)', '0 0 20px rgba(99,102,241,0.3)'] }}
+                transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
+                style={{ display: 'inline-block', background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff', border: 'none', borderRadius: 14, padding: '14px 34px', fontSize: 16, fontWeight: 800, cursor: 'pointer', textDecoration: 'none' }}
+              >
                 Launch App →
-              </motion.button>
+              </motion.div>
             </Link>
-            <motion.button whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}
+            <motion.button whileHover={{ scale: 1.04, transition: { duration: 0.15, ease: 'easeOut' } }} whileTap={{ scale: 0.97 }}
               onClick={() => document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' })}
-              style={{ background: 'transparent', color: '#e6edf3', border: '1px solid rgba(55,65,100,0.7)', borderRadius: 14, padding: '14px 34px', fontSize: 16, fontWeight: 700, cursor: 'pointer', backdropFilter: 'blur(8px)', transition: 'border-color 0.2s' }}>
+              style={{ background: 'transparent', color: '#e6edf3', border: '1px solid rgba(188,64,221,0.35)', borderRadius: 999, padding: '14px 34px', fontSize: 16, fontWeight: 700, cursor: 'pointer', backdropFilter: 'blur(8px)', transition: 'border-color 0.2s' }}>
               Explore
             </motion.button>
           </motion.div>
@@ -394,7 +484,7 @@ function Hero() {
               {/* Reflection / glow below card */}
               <div style={{
                 position: 'absolute', bottom: -40, left: '10%', right: '10%', height: 40,
-                background: 'rgba(99,102,241,0.22)', filter: 'blur(24px)', borderRadius: '50%',
+                background: 'rgba(188,64,221,0.22)', filter: 'blur(24px)', borderRadius: '50%',
                 pointerEvents: 'none',
               }} />
             </motion.div>
@@ -408,69 +498,134 @@ function Hero() {
         style={{ position: 'absolute', bottom: 36, left: '50%', transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
         <span style={{ fontSize: 10, color: '#4b5563', letterSpacing: '0.1em', textTransform: 'uppercase' }}>Scroll</span>
         <motion.div animate={{ y: [0, 8, 0] }} transition={{ repeat: Infinity, duration: 1.5, ease: 'easeInOut' }}
-          style={{ width: 20, height: 34, border: '1.5px solid rgba(99,102,241,0.35)', borderRadius: 999, display: 'flex', justifyContent: 'center', paddingTop: 5 }}>
-          <div style={{ width: 3, height: 8, borderRadius: 999, background: 'rgba(99,102,241,0.7)' }} />
+          style={{ width: 20, height: 34, border: '1.5px solid rgba(188,64,221,0.35)', borderRadius: 999, display: 'flex', justifyContent: 'center', paddingTop: 5 }}>
+          <div style={{ width: 3, height: 8, borderRadius: 999, background: 'rgba(188,64,221,0.7)' }} />
         </motion.div>
       </motion.div>
     </section>
   );
 }
 
-/* ─── Features ───────────────────────────────────────────────────────────── */
+/* ─── Feature SVG icons ──────────────────────────────────────────────────── */
+function FeatureIcon({ name, color }: { name: string; color: string }) {
+  const s = { width: 20, height: 20, stroke: color, fill: 'none', strokeWidth: '1.8', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+  const icons: Record<string, React.ReactNode> = {
+    stake: <svg viewBox="0 0 24 24" {...s}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
+    swap:  <svg viewBox="0 0 24 24" {...s}><path d="M8 3L4 7l4 4"/><path d="M4 7h16"/><path d="M16 21l4-4-4-4"/><path d="M20 17H4"/></svg>,
+    pool:  <svg viewBox="0 0 24 24" {...s}><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>,
+    chart: <svg viewBox="0 0 24 24" {...s}><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>,
+    lend:  <svg viewBox="0 0 24 24" {...s}><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>,
+  };
+  return <>{icons[name]}</>;
+}
+
+/* ─── Features data ──────────────────────────────────────────────────────── */
 const FEATURES = [
-  { icon: '⚡', bg: 'rgba(99,102,241,0.14)',  border: 'rgba(99,102,241,0.28)',  color: '#818cf8', glow: 'rgba(99,102,241,0.14)',  title: 'Stake & Earn',        desc: 'Lock your tokens and earn up to 12% APR. Rewards accrue every block and can be claimed anytime.', link: '/stake'     },
-  { icon: '↔',  bg: 'rgba(139,92,246,0.14)',  border: 'rgba(139,92,246,0.28)',  color: '#a78bfa', glow: 'rgba(139,92,246,0.12)',  title: 'Instant Swaps',       desc: 'Trade tokens at the best rates with minimal slippage. Powered by automated market makers.',        link: '/swap'      },
-  { icon: '◈',  bg: 'rgba(16,185,129,0.11)',  border: 'rgba(16,185,129,0.24)',  color: '#10b981', glow: 'rgba(16,185,129,0.08)',  title: 'Provide Liquidity',   desc: 'Deposit token pairs into pools, earn LP fees from every swap and unlock deeper yields.',             link: '/pool'      },
-  { icon: '◎',  bg: 'rgba(245,158,11,0.11)',  border: 'rgba(245,158,11,0.24)',  color: '#f59e0b', glow: 'rgba(245,158,11,0.08)',  title: 'Manage Positions',    desc: 'Track all your active positions, pending rewards, and portfolio performance in real time.',          link: '/positions' },
+  { iconKey: 'stake', color: '#818cf8', glow: 'rgba(99,102,241,0.12)',  title: 'Stake & Earn',      desc: 'Lock your tokens and earn up to 12% APR. Rewards accrue every block and can be claimed anytime.', link: '/stake',     badge: '12% APR'       },
+  { iconKey: 'swap',  color: '#a78bfa', glow: 'rgba(139,92,246,0.10)',  title: 'Instant Swaps',     desc: 'Trade tokens at the best rates with minimal slippage. Powered by automated market makers.',        link: '/swap',      badge: 'Low Slippage'  },
+  { iconKey: 'pool',  color: '#10b981', glow: 'rgba(16,185,129,0.08)',  title: 'Provide Liquidity', desc: 'Deposit token pairs into pools, earn LP fees from every swap and unlock deeper yields.',             link: '/pool',      badge: 'Earn LP Fees'  },
+  { iconKey: 'chart', color: '#f59e0b', glow: 'rgba(245,158,11,0.08)',  title: 'Manage Positions',  desc: 'Track all your active positions, pending rewards, and portfolio performance in real time.',          link: '/positions', badge: 'Real-time'     },
+  { iconKey: 'lend',  color: '#06b6d4', glow: 'rgba(6,182,212,0.08)',   title: 'Lend & Borrow',     desc: 'Supply assets to earn interest or borrow against your collateral. Full control, no middlemen.',      link: '/lend',      badge: 'Non-custodial' },
 ];
 
 const STEPS = [
-  { num: '01', title: 'Connect Your Wallet', desc: 'Link MetaMask, WalletConnect, or any EVM-compatible wallet in one click.', color: '#818cf8' },
-  { num: '02', title: 'Choose Your Strategy', desc: 'Stake for passive yields, swap for price exposure, or pool for fee income.', color: '#10b981' },
-  { num: '03', title: 'Earn & Compound',      desc: 'Watch rewards grow in real time. Claim and restake to compound your earnings.', color: '#f59e0b' },
+  { num: '01', title: 'Connect Your Wallet',  desc: 'Link MetaMask, WalletConnect, or any EVM-compatible wallet in one click. No registration, no KYC.',           color: '#CE6DE4' },
+  { num: '02', title: 'Choose Your Strategy', desc: 'Stake for passive yields, swap for price exposure, pool for fee income, or lend to earn interest on assets.', color: '#10b981' },
+  { num: '03', title: 'Deploy Your Capital',  desc: 'Supply assets to lending pools, add liquidity to AMM pools, or stake tokens — all from one dashboard.',        color: '#06b6d4' },
+  { num: '04', title: 'Earn & Compound',      desc: 'Watch rewards grow in real time. Claim, reinvest, and compound to maximise your on-chain yield.',              color: '#f59e0b' },
 ];
 
-/* ─── Features + How it works (merged stack slab) ────────────────────────── */
-function FeaturesAndHow() {
+/* ─── Stats ──────────────────────────────────────────────────────────────── */
+const STATS = [
+  { prefix: '$', value: 2.4,  suffix: 'M+', decimals: 1, label: 'Total Value Locked',  color: '#818cf8' },
+  { prefix: '$', value: 18.7, suffix: 'M+', decimals: 1, label: 'Total Volume Traded',  color: '#10b981' },
+  { prefix: '',  value: 1420, suffix: '+',  decimals: 0, label: 'Active Stakers',       color: '#f59e0b' },
+  { prefix: '',  value: 99.9, suffix: '%',  decimals: 1, label: 'Uptime',               color: '#06b6d4' },
+];
+
+function Stats() {
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: '-40px' });
+  return (
+    <section
+      ref={ref}
+      className="landing-stack-layer"
+      style={{ background: 'var(--bg-secondary)', borderTop: '1px solid rgba(255,255,255,0.05)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}
+    >
+      <div className="landing-section-glow-line" />
+      <div style={{ maxWidth: 1100, margin: '0 auto', padding: 'clamp(36px,5vw,56px) clamp(16px,4vw,32px)', position: 'relative', zIndex: 1 }}>
+        <motion.div
+          variants={stagger} initial="hidden" animate={inView ? 'show' : 'hidden'}
+          style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)' }}
+        >
+          {STATS.map((s, i) => (
+            <motion.div key={s.label} variants={fadeUp} style={{
+              textAlign: 'center', padding: 'clamp(16px,2vw,24px)',
+              borderRight: i < STATS.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none',
+            }}>
+              <div style={{ fontSize: 'clamp(28px,3.5vw,44px)', fontWeight: 900, color: '#e6edf3', letterSpacing: '-0.03em', lineHeight: 1, marginBottom: 8 }}>
+                <span style={{ color: s.color }}><Counter to={s.value} prefix={s.prefix} suffix={s.suffix} decimals={s.decimals} /></span>
+              </div>
+              <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{s.label}</div>
+            </motion.div>
+          ))}
+        </motion.div>
+      </div>
+    </section>
+  );
+}
+
+/* ─── Features ───────────────────────────────────────────────────────────── */
+function Features() {
   const ref = useRef(null);
   const inView = useInView(ref, { once: true, margin: '-60px' });
   return (
     <section
       id="features"
       ref={ref}
-      className="landing-stack-layer landing-stack-z3"
+      className="landing-stack-layer"
       style={{ background: 'var(--bg-primary)' }}
     >
-      <div className="landing-section-pad landing-section-pad--features-head">
-        <div style={{ maxWidth: 1100, margin: '100px auto', width: '100%' }}>
-          <motion.div variants={fadeUp} initial="hidden" animate={inView ? 'show' : 'hidden'} style={{ textAlign: 'center', marginBottom: 28 }}>
-            <span style={{ display: 'inline-block', background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.28)', color: '#818cf8', borderRadius: 999, padding: '5px 16px', fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 }}>Protocol Features</span>
-            <h2 style={{ fontSize: 'clamp(26px,4vw,48px)', fontWeight: 900, margin: '0 0 8px', letterSpacing: '-0.03em', color: '#e6edf3' }}>
+      <div className="landing-section-glow-line" style={{ background: 'linear-gradient(90deg, transparent, rgba(99,102,241,0.35), rgba(139,92,246,0.35), transparent)' }} />
+      <div className="landing-section-pad landing-section-pad--features-head" style={{ position: 'relative', zIndex: 1 }}>
+        <div style={{ maxWidth: 1100, margin: '0 auto', width: '100%' }}>
+          <motion.div variants={fadeUp} initial="hidden" animate={inView ? 'show' : 'hidden'} style={{ textAlign: 'center', marginBottom: 40 }}>
+            <span style={{ display: 'inline-block', background: 'rgba(188,64,221,0.08)', border: '1px solid rgba(188,64,221,0.2)', color: '#CE6DE4', borderRadius: 999, padding: '4px 14px', fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 16 }}>Protocol Features</span>
+            <h2 style={{ fontSize: 'clamp(26px,4vw,48px)', fontWeight: 900, margin: '0 0 12px', letterSpacing: '-0.03em', color: '#e6edf3' }}>
               Everything DeFi.{' '}
-              <span style={{ background: 'linear-gradient(135deg,#f59e0b,#fbbf24)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>One Platform.</span>
+              <span className="landing-gradient-text-animated">One Platform.</span>
             </h2>
-            <p style={{ fontSize: 15, color: '#9ca3af', maxWidth: 480, margin: '0 auto', lineHeight: 1.55 }}>Built for speed, designed for crypto natives. No compromises.</p>
+            <p style={{ fontSize: 15, color: '#6b7280', maxWidth: 460, margin: '0 auto', lineHeight: 1.6 }}>Built for speed, designed for crypto natives. No compromises.</p>
           </motion.div>
 
-          <motion.div className="landing-features-grid mt-50" variants={stagger} initial="hidden" animate={inView ? 'show' : 'hidden'}>
-            {FEATURES.map(f => (
-              <motion.div key={f.title} variants={fadeUp}>
-                <TiltCard maxTilt={14} style={{ height: '100%' }}>
+          <motion.div className="landing-features-grid" style={{ marginTop: 32 }} variants={stagger} initial="hidden" animate={inView ? 'show' : 'hidden'}>
+            {FEATURES.map((f, i) => (
+              <motion.div key={f.title} variants={fadeUp} style={{ height: '100%' }}>
+                <TiltCard maxTilt={8} style={{ height: '100%' }}>
                   <motion.div
-                    whileHover={{ borderColor: f.border, boxShadow: `0 20px 52px ${f.glow}` }}
-                    transition={{ duration: 0.25 }}
+                    whileHover={{ borderColor: `${f.color}30`, boxShadow: `0 16px 48px rgba(0,0,0,0.4), 0 0 0 1px ${f.color}20` }}
+                    transition={{ duration: 0.2 }}
                     onClick={() => window.location.href = f.link}
-                    style={{
-                      background: 'var(--bg-card)', border: '1px solid var(--border)',
-                      borderRadius: 20, padding: '28px 24px', cursor: 'pointer',
-                      height: '100%', boxSizing: 'border-box',
-                      transition: 'border-color 0.3s',
-                    }}
+                    className="landing-glass-card"
+                    style={{ height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', cursor: 'pointer', position: 'relative', overflow: 'hidden' }}
                   >
-                    <div style={{ width: 48, height: 48, borderRadius: 14, background: f.bg, border: `1px solid ${f.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, color: f.color, marginBottom: 20 }}>{f.icon}</div>
-                    <h3 style={{ margin: '0 0 10px', fontSize: 18, fontWeight: 800, color: '#e6edf3' }}>{f.title}</h3>
-                    <p style={{ margin: 0, fontSize: 14, color: '#9ca3af', lineHeight: 1.65 }}>{f.desc}</p>
-                    <div style={{ marginTop: 20, fontSize: 13, fontWeight: 700, color: f.color }}>Explore →</div>
+                    {/* Icon row */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+                      <div style={{ width: 44, height: 44, borderRadius: 12, background: `${f.color}14`, border: `1px solid ${f.color}28`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <FeatureIcon name={f.iconKey} color={f.color} />
+                      </div>
+                      <span style={{ background: `${f.color}12`, border: `1px solid ${f.color}25`, color: f.color, borderRadius: 999, padding: '3px 10px', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em' }}>
+                        {f.badge}
+                      </span>
+                    </div>
+
+                    <h3 style={{ margin: '0 0 8px', fontSize: 16, fontWeight: 700, color: '#e6edf3' }}>{f.title}</h3>
+                    <p style={{ margin: '0 0 auto', fontSize: 13, color: '#6b7280', lineHeight: 1.65 }}>{f.desc}</p>
+
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 20, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: f.color }}>Open →</span>
+                      <span style={{ fontSize: 10, color: '#374151', fontWeight: 600, letterSpacing: '0.04em' }}>0{i + 1}</span>
+                    </div>
                   </motion.div>
                 </TiltCard>
               </motion.div>
@@ -478,35 +633,52 @@ function FeaturesAndHow() {
           </motion.div>
         </div>
       </div>
+    </section>
+  );
+}
 
-      <div
-        className="landing-section-pad"
-        style={{
-          borderTop: '1px solid var(--border)',
-          background: 'radial-gradient(ellipse 60% 50% at 50% 0%,rgba(99,102,241,0.07) 0%,transparent 70%), var(--bg-secondary)',
-        }}
-      >
-        <div style={{ maxWidth: 900, margin: '0 auto', width: '100%' }}>
-          <motion.div variants={fadeUp} initial="hidden" animate={inView ? 'show' : 'hidden'} style={{ textAlign: 'center', marginBottom: 60 }}>
-            <span style={{ display: 'inline-block', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.24)', color: '#10b981', borderRadius: 999, padding: '5px 16px', fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 18 }}>How It Works</span>
-            <h2 style={{ fontSize: 'clamp(24px,3.5vw,44px)', fontWeight: 900, margin: 0, letterSpacing: '-0.03em', color: '#e6edf3' }}>Three steps to DeFi freedom.</h2>
-          </motion.div>
-          <motion.div variants={stagger} initial="hidden" animate={inView ? 'show' : 'hidden'} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            {STEPS.map(s => (
-              <motion.div key={s.num} variants={fadeUp}>
-                <TiltCard maxTilt={6}>
-                  <div className="landing-how-step" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 20, padding: '26px 30px', display: 'flex', alignItems: 'flex-start', gap: 26 }}>
-                    <div style={{ flexShrink: 0, fontSize: 'clamp(34px,5vw,52px)', fontWeight: 900, color: s.color, opacity: 0.22, lineHeight: 1 }}>{s.num}</div>
-                    <div>
-                      <h3 style={{ margin: '0 0 8px', fontSize: 19, fontWeight: 800, color: '#e6edf3' }}>{s.title}</h3>
-                      <p style={{ margin: 0, fontSize: 14, color: '#9ca3af', lineHeight: 1.65 }}>{s.desc}</p>
-                    </div>
-                  </div>
-                </TiltCard>
-              </motion.div>
-            ))}
-          </motion.div>
-        </div>
+/* ─── How It Works ───────────────────────────────────────────────────────── */
+function HowItWorks() {
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: '-60px' });
+  return (
+    <section
+      ref={ref}
+      className="landing-stack-layer"
+      style={{
+        background: 'radial-gradient(ellipse 60% 50% at 50% 0%,rgba(16,185,129,0.07) 0%,transparent 70%), var(--bg-secondary)',
+      }}
+    >
+      <div className="landing-section-glow-line" style={{ background: 'linear-gradient(90deg, transparent, rgba(16,185,129,0.3), rgba(6,182,212,0.3), transparent)' }} />
+      <div style={{ maxWidth: 720, margin: '0 auto', width: '100%', position: 'relative', zIndex: 1, padding: 'clamp(48px,6vw,72px) clamp(16px,4vw,32px)' }}>
+        <motion.div variants={fadeUp} initial="hidden" animate={inView ? 'show' : 'hidden'} style={{ textAlign: 'center', marginBottom: 48 }}>
+          <span style={{ display: 'inline-block', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', color: '#10b981', borderRadius: 999, padding: '4px 14px', fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 16 }}>How It Works</span>
+          <h2 style={{ fontSize: 'clamp(24px,3.5vw,40px)', fontWeight: 900, margin: 0, letterSpacing: '-0.03em', color: '#e6edf3' }}>Get started in four steps.</h2>
+        </motion.div>
+        <motion.div variants={stagger} initial="hidden" animate={inView ? 'show' : 'hidden'} style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+          {STEPS.map((s, i) => (
+            <motion.div key={s.num} variants={fadeUp} style={{ position: 'relative' }}>
+              {/* Connector line */}
+              {i < STEPS.length - 1 && (
+                <div style={{ position: 'absolute', left: 21, top: 'calc(100% - 20px)', width: 1, height: 40, background: `linear-gradient(to bottom, ${s.color}40, transparent)`, zIndex: 1 }} />
+              )}
+              <div className="landing-how-step" style={{
+                background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
+                borderRadius: 14, padding: '20px 24px', display: 'flex', alignItems: 'flex-start',
+                gap: 20, marginBottom: i < STEPS.length - 1 ? 24 : 0,
+              }}>
+                {/* Number circle */}
+                <div style={{ flexShrink: 0, width: 42, height: 42, borderRadius: '50%', background: `${s.color}14`, border: `1.5px solid ${s.color}35`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 800, color: s.color, letterSpacing: '0.02em', marginTop: 2 }}>
+                  {s.num}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <h3 style={{ margin: '0 0 6px', fontSize: 16, fontWeight: 700, color: '#e6edf3' }}>{s.title}</h3>
+                  <p style={{ margin: 0, fontSize: 13, color: '#6b7280', lineHeight: 1.65 }}>{s.desc}</p>
+                </div>
+              </div>
+            </motion.div>
+          ))}
+        </motion.div>
       </div>
     </section>
   );
@@ -520,33 +692,37 @@ function CTAAndFooter() {
     <>
       <section
         ref={ref}
-        className="landing-stack-layer landing-stack-z4 landing-section-pad"
-        style={{ textAlign: 'center', position: 'relative', overflow: 'hidden', background: 'var(--bg-primary)' }}
+        className="landing-stack-layer landing-section-pad"
+        style={{ textAlign: 'center', background: 'radial-gradient(ellipse 70% 70% at 50% 40%, rgba(99,102,241,0.1) 0%, transparent 65%), var(--bg-primary)' }}
       >
-        <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse 60% 80% at 50% 50%,rgba(99,102,241,0.11) 0%,transparent 70%)', pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse 60% 80% at 50% 50%,rgba(188,64,221,0.11) 0%,transparent 70%)', pointerEvents: 'none' }} />
+        <div className="landing-section-glow-line" style={{ background: 'linear-gradient(90deg, transparent, rgba(99,102,241,0.6), rgba(139,92,246,0.6), transparent)' }} />
         <motion.div variants={stagger} initial="hidden" animate={inView ? 'show' : 'hidden'} style={{ position: 'relative', zIndex: 1, maxWidth: 640, margin: '0 auto' }}>
           <motion.div variants={fadeUp}>
-            <span style={{ display: 'inline-block', background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.28)', color: '#818cf8', borderRadius: 999, padding: '5px 16px', fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 24 }}>Get Started Today</span>
+            <span style={{ display: 'inline-block', background: 'rgba(188,64,221,0.12)', border: '1px solid rgba(188,64,221,0.28)', color: '#CE6DE4', borderRadius: 999, padding: '5px 16px', fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 24 }}>Get Started Today</span>
           </motion.div>
           <motion.h2 variants={fadeUp} style={{ fontSize: 'clamp(28px,5vw,58px)', fontWeight: 900, lineHeight: 1.1, letterSpacing: '-0.04em', margin: '0 0 20px', color: '#e6edf3' }}>
             Your yield.{' '}
-            <span style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>Your rules.</span>
+            <span className="landing-gradient-text-animated">Your rules.</span>
           </motion.h2>
           <motion.p variants={fadeUp} style={{ fontSize: 17, color: '#9ca3af', margin: '0 0 40px', lineHeight: 1.65 }}>
-            Join 1,420+ stakers already earning rewards. Non-custodial. Permissionless. Yours.
+            Join 1,420+ users already earning rewards. Stake, swap, pool, or lend — non-custodial, permissionless, yours.
           </motion.p>
-          <motion.div variants={fadeUp} className='mt-50' style={{ display: 'flex', gap: 14, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <motion.div variants={fadeUp} style={{ display: 'flex', gap: 14, justifyContent: 'center', flexWrap: 'wrap', marginTop: 8 }}>
             <Link to="/stake">
               <TiltCard maxTilt={8} hoverScale={1.04}>
-                <motion.button whileHover={{ boxShadow: '0 0 44px rgba(99,102,241,0.55)' }} whileTap={{ scale: 0.97 }}
-                  style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff', border: 'none', borderRadius: 14, padding: '16px 40px', fontSize: 16, fontWeight: 800, cursor: 'pointer' }}>
+                <motion.button
+                  animate={{ boxShadow: ['0 0 20px rgba(99,102,241,0.3)', '0 0 48px rgba(99,102,241,0.7)', '0 0 20px rgba(188,64,221,0.3)'] }}
+                  transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
+                  whileHover={{ scale: 1.04, transition: { duration: 0.15, ease: 'easeOut' } }} whileTap={{ scale: 0.97 }}
+                  style={{ background: '#BC40DD', color: '#fff', border: 'none', borderRadius: 999, padding: '16px 40px', fontSize: 16, fontWeight: 800, cursor: 'pointer' }}>
                   Start Earning →
                 </motion.button>
               </TiltCard>
             </Link>
             <Link to="/swap">
-              <motion.button whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.97 }}
-                style={{ background: 'var(--bg-secondary)', color: '#e6edf3', border: '1px solid var(--border)', borderRadius: 14, padding: '16px 40px', fontSize: 16, fontWeight: 700, cursor: 'pointer' }}>
+              <motion.button whileHover={{ scale: 1.04, transition: { duration: 0.15, ease: 'easeOut' } }} whileTap={{ scale: 0.97 }}
+                style={{ background: 'var(--bg-secondary)', color: '#e6edf3', border: '1px solid rgba(188,64,221,0.35)', borderRadius: 999, padding: '16px 40px', fontSize: 16, fontWeight: 700, cursor: 'pointer' }}>
                 Try Swapping
               </motion.button>
             </Link>
@@ -564,8 +740,11 @@ function CTAAndFooter() {
       >
         <div className="landing-footer-inner" style={{ width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 30, height: 30, borderRadius: 9, background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 800, color: '#fff' }}>FS</div>
-            <span style={{ fontWeight: 800, fontSize: 15, color: '#f9fafb' }}>FLUX SWAP</span>
+            <div style={{ width: 30, height: 30, borderRadius: 9, background: 'linear-gradient(135deg,#BC40DD,#A855F7)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 800, color: '#fff', flexShrink: 0 }}>FS</div>
+            <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
+              <span style={{ fontWeight: 800, fontSize: 14, color: '#ffffff', letterSpacing: '0.04em' }}>FLUX <span style={{ color: '#BC40DD' }}>SWAP</span></span>
+              <span style={{ fontSize: 9, color: '#A855F7', fontWeight: 500, letterSpacing: '0.06em' }}>network</span>
+            </div>
           </div>
           <div className="landing-footer-links">
             {['Terms', 'Privacy', 'Security', 'Docs'].map(l => (
@@ -583,11 +762,19 @@ function CTAAndFooter() {
 
 /* ─── Page ───────────────────────────────────────────────────────────────── */
 export default function LandingPage() {
+  useEffect(() => {
+    document.documentElement.classList.add('hide-scrollbar');
+    return () => document.documentElement.classList.remove('hide-scrollbar');
+  }, []);
+
   return (
     <div className="landing-page-root" style={{ background: 'var(--bg-primary)', minHeight: '100vh' }}>
+      <ScrollProgressBar />
       <Nav />
       <Hero />
-      <FeaturesAndHow />
+      <Stats />
+      <Features />
+      <HowItWorks />
       <CTAAndFooter />
     </div>
   );

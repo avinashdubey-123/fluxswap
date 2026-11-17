@@ -7,17 +7,15 @@ import {
   maxUint256,
   parseUnits,
   zeroAddress,
-  parseAbiItem,
   type Address,
 } from "viem";
-import { readContract, writeContract, simulateContract } from "viem/actions";
+import { readContract, writeContract, simulateContract, getContractEvents } from "viem/actions";
 import {
   waitForTransactionReceipt,
   getWalletClient,
   getAccount,
-  getPublicClient,
 } from "wagmi/actions";
-import { CHAIN_ID, CONTRACTS, GAS } from "../../config/contracts";
+import { CHAIN_ID, CONTRACTS, GAS, NPM_DEPLOYMENT_BLOCK } from "../../config/contracts";
 import type { Position, MintParams, Token } from "../../types";
 import { getListedTokenMeta } from "../../config/tokens";
 import {
@@ -33,47 +31,69 @@ import type {
 import { tickToPrice, isInRange } from "../../utils/tickUtils";
 import { devLog, devError } from "../../utils/devLog";
 import { collectViemErrorText } from "../../utils/viemErrors";
-import {
-  getAmmPublicClient,
-  positionTokenAmounts,
-  readPoolSlot0,
-} from "./poolService";
-import { ammWagmiConfig } from "./ammClient";
+import { positionTokenAmounts, readPoolSlot0 } from "./poolService";
+import { ammWagmiConfig, getPublicClient, getHistoryPublicClient, submitAmmTransaction } from "./ammClient";
 import { fetchTokenDecimals, mergeTokenDecimals } from "./tokenMetadata";
 
 const config = ammWagmiConfig;
 
-const transferEvent = parseAbiItem(
-  "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)",
-);
+// const npmEnumerableAbi = [
+//   ...positionManagerAbi,
+//   {
+//     inputs: [{ name: "owner", type: "address" }],
+//     name: "balanceOf",
+//     outputs: [{ name: "", type: "uint256" }],
+//     stateMutability: "view",
+//     type: "function"
+//   },
+//   {
+//     inputs: [
+//       { name: "owner", type: "address" },
+//       { name: "index", type: "uint256" }
+//     ],
+//     name: "tokenOfOwnerByIndex",
+//     outputs: [{ name: "", type: "uint256" }],
+//     stateMutability: "view",
+//     type: "function"
+//   }
+// ] as const;
 
 function normalizeMintError(err: unknown): Error {
   const text = collectViemErrorText(err);
+  if (/nonce too low/i.test(text)) {
+    return new Error("Wallet is out of sync. Refresh and try again.");
+  }
   if (/Invalid token ID/i.test(text)) {
-    return new Error(
-      "Mint reverted with Invalid token ID — common cause is NonfungiblePositionManager `mint` reading `positions(tokenId)` before the position is stored. Use an NPM deployment that reads fee growth from the pool position, or adjust mint ordering in Solidity outside this workspace (contracts here are not edited per project rules)."
-    );
+    return new Error("Could not add liquidity. Please try again.");
   }
   if (/Internal JSON-RPC error|InternalRpcError/i.test(text)) {
-    return new Error(
-      "RPC hid the revert reason. Common causes: token amounts do not match pool price (re-enter amounts after the pool loads), insufficient balance, or an invalid price band — try Full range. You can also switch Amoy RPC (VITE_POLYGON_AMOY_RPC)."
-    );
+    return new Error("Could not add liquidity. Check your amounts and price range.");
   }
   if (err instanceof Error) return err;
   return new Error(text || "Add liquidity failed");
 }
 
+const tokenMetaCache = new Map<string, Promise<Token>>();
+
 async function tokenMeta(addr: string): Promise<Token> {
-  const listed = getListedTokenMeta(addr);
-  const dec = await fetchTokenDecimals(addr);
-  if (listed) return { ...listed, decimals: dec };
-  return {
-    address: addr,
-    symbol: `${addr.slice(0, 6)}…${addr.slice(-4)}`,
-    name: "Unknown",
-    decimals: dec,
-    logoColor: "#8b949e",
-  };
+  const key = addr.toLowerCase();
+  if (tokenMetaCache.has(key)) return tokenMetaCache.get(key)!;
+
+  const promise = (async () => {
+    const listed = getListedTokenMeta(addr);
+    const dec = await fetchTokenDecimals(addr);
+    if (listed) return { ...listed, decimals: dec };
+    return {
+      address: addr,
+      symbol: `${addr.slice(0, 6)}…${addr.slice(-4)}`,
+      name: 'Unknown',
+      decimals: dec,
+      logoColor: '#8b949e',
+    };
+  })();
+
+  tokenMetaCache.set(key, promise);
+  return promise;
 }
 
 async function poolAddressFor(
@@ -81,7 +101,7 @@ async function poolAddressFor(
   token1: string,
   fee: number,
 ): Promise<Address | null> {
-  const addr = (await readContract(getAmmPublicClient(), {
+  const addr = (await readContract(getPublicClient(), {
     address: CONTRACTS.Factory as Address,
     abi: factoryAbi,
     functionName: "getPool",
@@ -91,37 +111,158 @@ async function poolAddressFor(
   return addr;
 }
 
-async function ownedPositionTokenIds(user: Address): Promise<bigint[]> {
-  const pc = getPublicClient(config, { chainId: CHAIN_ID });
-  if (!pc) return [];
+async function getHighestTokenId(pc: any): Promise<bigint> {
+  const address = CONTRACTS.NonfungiblePositionManager as Address;
 
-  const logs = await pc.getLogs({
-    address: CONTRACTS.NonfungiblePositionManager as Address,
-    event: transferEvent,
-    fromBlock: 0n,
-    toBlock: "latest",
-  });
+  let low = 1n;
+  let high = 50n; // reasonable initial upper bound
+  let highest = 0n;
 
-  logs.sort((a, b) => {
-    const bn = Number(a.blockNumber - b.blockNumber);
-    if (bn !== 0) return bn;
-    return Number(a.logIndex - b.logIndex);
-  });
-
-  const u = user.toLowerCase();
-  const owned = new Set<string>();
-  for (const log of logs) {
-    const args = log.args as Erc721TransferArgs | undefined;
-    if (!args?.from || !args?.to || args.tokenId === undefined) continue;
-    const id = args.tokenId.toString();
-    if (args.from.toLowerCase() === u) owned.delete(id);
-    if (args.to.toLowerCase() === u) owned.add(id);
+  // Exponential search for upper bound
+  while (low <= high) {
+    try {
+      const owner = await readContract(pc, { address, abi: erc721Abi, functionName: 'ownerOf', args: [low] });
+      console.log(`owner of token ID ${low} is ${owner}`);
+      highest = low;
+    } catch {
+      // ignore missing token IDs
+    }
+    low += 1n;
   }
-  return [...owned].map((id) => BigInt(id));
+  
+  console.log(`Highest minted position token ID is ${highest}`);
+  return highest;
+}
+
+async function ownedPositionTokenIds(user: Address): Promise<bigint[]> {
+  const pc = getPublicClient();
+
+  // 1 call to get total count to see if we even need to search
+  const balance = await readContract(pc, {
+    address: CONTRACTS.NonfungiblePositionManager as Address,
+    abi: erc721Abi,
+    functionName: 'balanceOf',
+    args: [user],
+  });
+
+  console.log(`User ${user} owns ${balance} position token(s)`);
+
+  if (balance === 0n) return [];
+
+  const historyRpcConfigured =
+    Boolean(
+      (import.meta.env.VITE_POLYGON_AMOY_HISTORY_RPC as string | undefined)?.trim(),
+    );
+
+  if (historyRpcConfigured) {
+    try {
+      return await ownedPositionTokenIdsFromHistoryEvents(user);
+    } catch (error) {
+      console.warn(
+        'Historical log scan failed, falling back to ownerOf enumeration:',
+        error,
+      );
+    }
+  }
+
+  const highestId = await getHighestTokenId(pc);
+
+  if (highestId === 0n) return [];
+
+  const candidates = Array.from({ length: Number(highestId) }, (_, i) => BigInt(i + 1));
+  const ownedIds: bigint[] = [];
+  const CHUNK_SIZE = 500;
+
+  for (let i = 0; i < candidates.length; i += CHUNK_SIZE) {
+    const chunk = candidates.slice(i, i + CHUNK_SIZE);
+
+    const ownerResults = await Promise.allSettled(
+      chunk.map(id =>
+        readContract(pc, {
+          address: CONTRACTS.NonfungiblePositionManager as Address,
+          abi: erc721Abi,
+          functionName: 'ownerOf',
+          args: [id],
+        }),
+      ),
+    );
+    
+    
+    chunk.forEach((id, idx) => {
+      const res = ownerResults[idx];
+      if (res.status === 'fulfilled' && res.value === user) {
+        ownedIds.push(id);
+      }
+    });
+    
+    console.log(`owner results are: status ${ownerResults[0].status} value ${ownerResults[0].status === 'fulfilled' ? ownerResults[0].value : ownerResults[0].reason}`);
+  }
+
+  console.log(`Found ${ownedIds.length} owned position token ID(s) for user ${user}`);
+  return ownedIds;
+}
+
+async function ownedPositionTokenIdsFromHistoryEvents(
+  user: Address,
+): Promise<bigint[]> {
+  const historyClient = getHistoryPublicClient();
+  const contractAddress = CONTRACTS.NonfungiblePositionManager as Address;
+  const latestBlock = await historyClient.getBlockNumber();
+  const ownedIds = new Set<bigint>();
+  const CHUNK_BLOCKS = 10_000n;
+
+  const fetchLogs = async (args: { to?: Address; from?: Address }, fromBlock: bigint, toBlock: bigint) => {
+    try {
+      return await getContractEvents(historyClient, {
+        address: contractAddress,
+        abi: erc721Abi,
+        eventName: 'Transfer',
+        args,
+        fromBlock,
+        toBlock,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : String(error ?? 'Unknown error');
+      if (/pruned|history has been pruned|missing historical|archive/i.test(message)) {
+        throw new Error(
+          'Historical logs are unavailable from the configured RPC. Set VITE_POLYGON_AMOY_HISTORY_RPC to a node that retains history, or use a dedicated indexer.',
+        );
+      }
+      throw error;
+    }
+  };
+
+  for (
+    let fromBlock = NPM_DEPLOYMENT_BLOCK;
+    fromBlock <= latestBlock;
+    fromBlock += CHUNK_BLOCKS
+  ) {
+    let toBlock = fromBlock + (CHUNK_BLOCKS - 1n);
+    if (toBlock > latestBlock) toBlock = latestBlock;
+
+    const incoming = await fetchLogs({ to: user }, fromBlock, toBlock);
+    for (const log of incoming) {
+      const tokenId = log.args.tokenId;
+      if (tokenId !== undefined) ownedIds.add(BigInt(tokenId));
+    }
+
+    const outgoing = await fetchLogs({ from: user }, fromBlock, toBlock);
+    for (const log of outgoing) {
+      const tokenId = log.args.tokenId;
+      if (tokenId !== undefined) ownedIds.delete(BigInt(tokenId));
+    }
+  }
+
+  const owned = Array.from(ownedIds);
+  console.log(`Found ${owned.length} owned position token ID(s) for user ${user}`);
+  return owned;
 }
 
 async function buildPosition(tokenId: bigint): Promise<Position | null> {
-  const row = (await readContract(getAmmPublicClient(), {
+  const row = (await readContract(getPublicClient(), {
     address: CONTRACTS.NonfungiblePositionManager as Address,
     abi: positionManagerAbi,
     functionName: "positions",
@@ -146,7 +287,11 @@ async function buildPosition(tokenId: bigint): Promise<Position | null> {
     return null;
   }
 
-  const poolAddr = await poolAddressFor(t0, t1, fee);
+  const [poolAddr, tok0, tok1] = await Promise.all([
+    poolAddressFor(t0, t1, fee),
+    tokenMeta(t0),
+    tokenMeta(t1),
+  ]);
   if (!poolAddr) return null;
 
   const { sqrtPriceX96, tick } = await readPoolSlot0(poolAddr);
@@ -157,7 +302,6 @@ async function buildPosition(tokenId: bigint): Promise<Position | null> {
     liquidity,
   );
 
-  const [tok0, tok1] = await Promise.all([tokenMeta(t0), tokenMeta(t1)]);
   const dec0 = tok0.decimals;
   const dec1 = tok1.decimals;
 
@@ -188,18 +332,25 @@ async function buildPosition(tokenId: bigint): Promise<Position | null> {
 
 export async function getUserPositions(
   walletAddress: string,
-): Promise<Position[]> {
-  const ids = await ownedPositionTokenIds(walletAddress as Address);
-  const out: Position[] = [];
-  for (const id of ids) {
-    try {
-      const p = await buildPosition(id);
-      if (p) out.push(p);
-    } catch {
-      /* burned NFT or stale log index */
-    }
+): Promise<{ positions: Position[]; total: number }> {
+  let allIds: bigint[] = [];
+  try {
+    allIds = await ownedPositionTokenIds(walletAddress as Address);
+  } catch (err) {
+    console.warn('Could not fetch position token IDs:', err);
+    return { positions: [], total: 0 };
   }
-  return out.sort((a, b) => b.tokenId - a.tokenId);
+
+  // Sort descending so newest positions are on top
+  allIds.sort((a, b) => Number(b - a));
+
+  const results = await Promise.allSettled(allIds.map(id => buildPosition(id)));
+  const positions = results
+    .filter((r): r is PromiseFulfilledResult<Position | null> => r.status === 'fulfilled')
+    .map(r => r.value)
+    .filter((p): p is Position => p !== null);
+
+  return { positions, total: positions.length };
 }
 
 export async function getPosition(tokenId: number): Promise<Position | null> {
@@ -237,7 +388,7 @@ export async function addLiquidity(
   const amount1Desired = parseUnits(raw1, mt1.decimals);
 
   for (const t of [mt0, mt1]) {
-    const allowance = (await readContract(getAmmPublicClient(), {
+    const allowance = (await readContract(getPublicClient(), {
       address: t.address as Address,
       abi: erc20Abi,
       functionName: "allowance",
@@ -253,15 +404,18 @@ export async function addLiquidity(
         need: need.toString(),
         allowance: allowance.toString(),
       });
-      const approveHash = await writeContract(walletClient, {
-        address: t.address as Address,
-        abi: erc20Abi,
-        functionName: "approve",
-        args: [CONTRACTS.NonfungiblePositionManager as Address, maxUint256],
-        gas: GAS.limits.approve,
-        maxFeePerGas: GAS.maxFeePerGas,
-        maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
-      });
+      const approveHash = await submitAmmTransaction(user, nonce =>
+        writeContract(walletClient, {
+          address: t.address as Address,
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [CONTRACTS.NonfungiblePositionManager as Address, maxUint256],
+          nonce,
+          gas: GAS.limits.approve,
+          maxFeePerGas: GAS.maxFeePerGas,
+          maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
+        }),
+      );
       const ar = await waitForTransactionReceipt(config, {
         hash: approveHash,
         chainId: CHAIN_ID,
@@ -299,7 +453,7 @@ export async function addLiquidity(
   let hash: `0x${string}`;
   try {
     devLog("tx/mint", "simulate mint", mintArgs);
-    const { request } = await simulateContract(getAmmPublicClient(), {
+    const { request } = await simulateContract(getPublicClient(), {
       address: CONTRACTS.NonfungiblePositionManager as Address,
       abi: positionManagerAbi,
       functionName: "mint",
@@ -309,7 +463,9 @@ export async function addLiquidity(
       maxFeePerGas: GAS.maxFeePerGas,
       maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
     });
-    hash = await walletClient.writeContract(request);
+    hash = await submitAmmTransaction(user, nonce =>
+      walletClient.writeContract({ ...request, nonce }),
+    );
     devLog("tx/mint", "submitted", { hash });
     const receipt = await waitForTransactionReceipt(config, {
       hash,
@@ -345,8 +501,7 @@ export async function addLiquidity(
       }
     }
     if (tokenId === 0) {
-      const positions = await getUserPositions(user);
-      tokenId = positions[0]?.tokenId ?? 0;
+      console.warn('Could not parse tokenId from mint receipt');
     }
     return { hash, tokenId };
   } catch (error) {
@@ -364,7 +519,7 @@ export async function removeLiquidity(
   if (!walletClient || !user)
     throw new Error(`Connect a wallet on the AMM network (chain ${CHAIN_ID}).`);
 
-  const row = (await readContract(getAmmPublicClient(), {
+  const row = (await readContract(getPublicClient(), {
     address: CONTRACTS.NonfungiblePositionManager as Address,
     abi: positionManagerAbi,
     functionName: "positions",
@@ -383,23 +538,26 @@ export async function removeLiquidity(
     liqRemove: liqRemove.toString(),
     deadline: deadline.toString(),
   });
-  const decHash = await writeContract(walletClient, {
-    address: CONTRACTS.NonfungiblePositionManager as Address,
-    abi: positionManagerAbi,
-    functionName: "decreaseLiquidity",
-    args: [
-      {
-        tokenId: BigInt(tokenId),
-        liquidity: liqRemove,
-        amount0Min: 0n,
-        amount1Min: 0n,
-        deadline,
-      },
-    ],
-    gas: GAS.limits.decreaseLiquidity,
-    maxFeePerGas: GAS.maxFeePerGas,
-    maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
-  });
+  const decHash = await submitAmmTransaction(user, nonce =>
+    writeContract(walletClient, {
+      address: CONTRACTS.NonfungiblePositionManager as Address,
+      abi: positionManagerAbi,
+      functionName: "decreaseLiquidity",
+      args: [
+        {
+          tokenId: BigInt(tokenId),
+          liquidity: liqRemove,
+          amount0Min: 0n,
+          amount1Min: 0n,
+          deadline,
+        },
+      ],
+      nonce,
+      gas: GAS.limits.decreaseLiquidity,
+      maxFeePerGas: GAS.maxFeePerGas,
+      maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
+    }),
+  );
   const decRc = await waitForTransactionReceipt(config, {
     hash: decHash,
     chainId: CHAIN_ID,
@@ -410,22 +568,25 @@ export async function removeLiquidity(
   });
 
   devLog("tx/remove", "collect", { tokenId });
-  const collectHash = await writeContract(walletClient, {
-    address: CONTRACTS.NonfungiblePositionManager as Address,
-    abi: positionManagerAbi,
-    functionName: "collect",
-    args: [
-      {
-        tokenId: BigInt(tokenId),
-        recipient: user,
-        amount0Max: 2n ** 128n - 1n,
-        amount1Max: 2n ** 128n - 1n,
-      },
-    ],
-    gas: GAS.limits.collect,
-    maxFeePerGas: GAS.maxFeePerGas,
-    maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
-  });
+  const collectHash = await submitAmmTransaction(user, nonce =>
+    writeContract(walletClient, {
+      address: CONTRACTS.NonfungiblePositionManager as Address,
+      abi: positionManagerAbi,
+      functionName: "collect",
+      args: [
+        {
+          tokenId: BigInt(tokenId),
+          recipient: user,
+          amount0Max: 2n ** 128n - 1n,
+          amount1Max: 2n ** 128n - 1n,
+        },
+      ],
+      nonce,
+      gas: GAS.limits.collect,
+      maxFeePerGas: GAS.maxFeePerGas,
+      maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
+    }),
+  );
   const colRc = await waitForTransactionReceipt(config, {
     hash: collectHash,
     chainId: CHAIN_ID,
@@ -436,7 +597,7 @@ export async function removeLiquidity(
   });
 
   if (liquidityPercent >= 100) {
-    const after = (await readContract(getAmmPublicClient(), {
+    const after = (await readContract(getPublicClient(), {
       address: CONTRACTS.NonfungiblePositionManager as Address,
       abi: positionManagerAbi,
       functionName: "positions",
@@ -447,15 +608,18 @@ export async function removeLiquidity(
     const owed1 = after[11];
     if (liqLeft === 0n && owed0 === 0n && owed1 === 0n) {
       devLog("tx/remove", "burn", { tokenId });
-      const burnHash = await writeContract(walletClient, {
-        address: CONTRACTS.NonfungiblePositionManager as Address,
-        abi: positionManagerAbi,
-        functionName: "burn",
-        args: [BigInt(tokenId)],
-        gas: GAS.limits.burn,
-        maxFeePerGas: GAS.maxFeePerGas,
-        maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
-      });
+      const burnHash = await submitAmmTransaction(user, nonce =>
+        writeContract(walletClient, {
+          address: CONTRACTS.NonfungiblePositionManager as Address,
+          abi: positionManagerAbi,
+          functionName: "burn",
+          args: [BigInt(tokenId)],
+          nonce,
+          gas: GAS.limits.burn,
+          maxFeePerGas: GAS.maxFeePerGas,
+          maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
+        }),
+      );
       const burnRc = await waitForTransactionReceipt(config, {
         hash: burnHash,
         chainId: CHAIN_ID,
@@ -476,26 +640,30 @@ export async function collectFees(
   recipientAddress: string,
 ): Promise<{ hash: string }> {
   const walletClient = await getWalletClient(config, { chainId: CHAIN_ID });
-  if (!walletClient)
+  const { address: user } = getAccount(config);
+  if (!walletClient || !user)
     throw new Error(`Connect a wallet on the AMM network (chain ${CHAIN_ID}).`);
 
   devLog("tx/collect", "collect", { tokenId, recipientAddress });
-  const hash = await writeContract(walletClient, {
-    address: CONTRACTS.NonfungiblePositionManager as Address,
-    abi: positionManagerAbi,
-    functionName: "collect",
-    args: [
-      {
-        tokenId: BigInt(tokenId),
-        recipient: recipientAddress as Address,
-        amount0Max: 2n ** 128n - 1n,
-        amount1Max: 2n ** 128n - 1n,
-      },
-    ],
-    gas: GAS.limits.collect,
-    maxFeePerGas: GAS.maxFeePerGas,
-    maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
-  });
+  const hash = await submitAmmTransaction(user, nonce =>
+    writeContract(walletClient, {
+      address: CONTRACTS.NonfungiblePositionManager as Address,
+      abi: positionManagerAbi,
+      functionName: "collect",
+      args: [
+        {
+          tokenId: BigInt(tokenId),
+          recipient: recipientAddress as Address,
+          amount0Max: 2n ** 128n - 1n,
+          amount1Max: 2n ** 128n - 1n,
+        },
+      ],
+      nonce,
+      gas: GAS.limits.collect,
+      maxFeePerGas: GAS.maxFeePerGas,
+      maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
+    }),
+  );
   const cr = await waitForTransactionReceipt(config, {
     hash,
     chainId: CHAIN_ID,
@@ -514,7 +682,7 @@ export async function increaseLiquidity(
   if (!walletClient || !user)
     throw new Error(`Connect a wallet on the AMM network (chain ${CHAIN_ID}).`);
 
-  const row = (await readContract(getAmmPublicClient(), {
+  const row = (await readContract(getPublicClient(), {
     address: CONTRACTS.NonfungiblePositionManager as Address,
     abi: positionManagerAbi,
     functionName: "positions",
@@ -539,22 +707,25 @@ export async function increaseLiquidity(
     [t1, amt1],
   ] as const) {
     if (amt === 0n) continue;
-    const allowance = (await readContract(getAmmPublicClient(), {
+    const allowance = (await readContract(getPublicClient(), {
       address: addr,
       abi: erc20Abi,
       functionName: "allowance",
       args: [user, CONTRACTS.NonfungiblePositionManager as Address],
     })) as bigint;
     if (allowance < amt) {
-      const approveHash = await writeContract(walletClient, {
-        address: addr,
-        abi: erc20Abi,
-        functionName: "approve",
-        args: [CONTRACTS.NonfungiblePositionManager as Address, maxUint256],
-        gas: GAS.limits.approve,
-        maxFeePerGas: GAS.maxFeePerGas,
-        maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
-      });
+      const approveHash = await submitAmmTransaction(user, nonce =>
+        writeContract(walletClient, {
+          address: addr,
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [CONTRACTS.NonfungiblePositionManager as Address, maxUint256],
+          nonce,
+          gas: GAS.limits.approve,
+          maxFeePerGas: GAS.maxFeePerGas,
+          maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
+        }),
+      );
       await waitForTransactionReceipt(config, {
         hash: approveHash,
         chainId: CHAIN_ID,
@@ -567,24 +738,27 @@ export async function increaseLiquidity(
     tokenId,
     deadline: deadline.toString(),
   });
-  const hash = await writeContract(walletClient, {
-    address: CONTRACTS.NonfungiblePositionManager as Address,
-    abi: positionManagerAbi,
-    functionName: "increaseLiquidity",
-    args: [
-      {
-        tokenId: BigInt(tokenId),
-        amount0Desired: amt0,
-        amount1Desired: amt1,
-        amount0Min: 0n,
-        amount1Min: 0n,
-        deadline,
-      },
-    ],
-    gas: GAS.limits.increaseLiquidity,
-    maxFeePerGas: GAS.maxFeePerGas,
-    maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
-  });
+  const hash = await submitAmmTransaction(user, nonce =>
+    writeContract(walletClient, {
+      address: CONTRACTS.NonfungiblePositionManager as Address,
+      abi: positionManagerAbi,
+      functionName: "increaseLiquidity",
+      args: [
+        {
+          tokenId: BigInt(tokenId),
+          amount0Desired: amt0,
+          amount1Desired: amt1,
+          amount0Min: 0n,
+          amount1Min: 0n,
+          deadline,
+        },
+      ],
+      nonce,
+      gas: GAS.limits.increaseLiquidity,
+      maxFeePerGas: GAS.maxFeePerGas,
+      maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
+    }),
+  );
   const ir = await waitForTransactionReceipt(config, {
     hash,
     chainId: CHAIN_ID,

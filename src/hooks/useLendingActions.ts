@@ -1,0 +1,256 @@
+import { useCallback, useState } from 'react';
+import { parseUnits, formatUnits, maxUint256, createPublicClient } from 'viem';
+import { collectViemErrorText } from '../utils/viemErrors';
+import { getErrorMessage, isUserRejection } from '../utils/errors';
+import { baseSepolia } from 'viem/chains';
+import { useWalletClient } from 'wagmi';
+import { useAppKitAccount } from '@reown/appkit/react';
+import { LENDING_CONTRACTS, INTEREST_RATE_MODE, REFERRAL_CODE, LENDING_CHAIN_ID, createBaseSepoliaTransport } from '../config/lending';
+import { LENDING_POOL_ABI, ERC20_ABI } from '../contracts/lendingAbis';
+import { getTransactionCount } from 'viem/actions';
+import { submitWithManagedNonce } from '../services/api/transactionNonceManager';
+
+export type TxStatus = 'idle' | 'approving' | 'pending' | 'success' | 'error';
+
+const readClient = createPublicClient({ chain: baseSepolia, transport: createBaseSepoliaTransport(),
+  // Base Sepolia blocks are ~2s; viem's default 4s receipt polling adds dead time per tx.
+  pollingInterval: 1_000,
+});
+
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+/**
+ * Reads can hit an RPC node a block behind the one that confirmed the previous
+ * transaction. Retry a few times so a freshly confirmed approval / collateral
+ * change is visible before we judge the next step by it.
+ */
+async function retryRead<T>(fn: () => Promise<T>, attempts = 4, delayMs = 1500): Promise<T> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastError = e;
+      if (i < attempts - 1) await sleep(delayMs);
+    }
+  }
+  throw lastError;
+}
+
+function submitLendingTransaction(
+  account: `0x${string}`,
+  walletClient: NonNullable<ReturnType<typeof useWalletClient>['data']>,
+  submit: (nonce: number) => Promise<`0x${string}`>,
+): Promise<`0x${string}`> {
+  return submitWithManagedNonce({
+    account,
+    chainId: LENDING_CHAIN_ID,
+    getNetworkNonce: async () => {
+      const [latest, pending] = await Promise.all([
+        getTransactionCount(walletClient as Parameters<typeof getTransactionCount>[0], { address: account, blockTag: 'latest' }),
+        getTransactionCount(walletClient as Parameters<typeof getTransactionCount>[0], { address: account, blockTag: 'pending' }),
+      ]);
+      return Math.max(latest, pending);
+    },
+    submit,
+  });
+}
+
+function parseError(e: unknown): string {
+  const msg = collectViemErrorText(e);
+  if (isUserRejection(e)) return 'Transaction rejected by user.';
+  if (/insufficient funds/i.test(msg)) return 'Insufficient ETH for gas on Base Sepolia.';
+  if (/HealthFactorLowerThanLiquidationThreshold/i.test(msg)) {
+    return 'Withdrawal rejected: removing this collateral would push your health factor below 1. Repay your outstanding debt first, then withdraw.';
+  }
+  if (/exceeds max transaction gas limit/i.test(msg)) {
+    return 'Transaction failed: gas estimate too high. Please try a smaller amount.';
+  }
+  if (/reverted on-chain/i.test(msg)) return getErrorMessage(e);
+  if (/Internal JSON-RPC error|InternalRpcError|execution reverted/i.test(msg)) {
+    return 'Transaction reverted on-chain. Common causes: insufficient balance, reserve cap reached, paused reserve, or wrong network.';
+  }
+  return getErrorMessage(e, 'Transaction failed. Please try again.');
+}
+
+export function useLendingActions() {
+  const { data: walletClient } = useWalletClient();
+  const { address } = useAppKitAccount();
+  const [status, setStatus] = useState<TxStatus>('idle');
+  const [error,  setError ] = useState<string | null>(null);
+
+  const reset = useCallback(() => { setStatus('idle'); setError(null); }, []);
+
+  const ensureCorrectChain = useCallback(() => {
+    const walletChainId = walletClient?.chain?.id;
+    if (walletChainId !== LENDING_CHAIN_ID) {
+      throw new Error(`Wrong network. Please switch wallet to Base Sepolia (chain ${LENDING_CHAIN_ID}).`);
+    }
+  }, [walletClient]);
+
+  const ensureApproval = useCallback(async (asset: `0x${string}`, amount: bigint) => {
+    if (!walletClient || !address) throw new Error('Wallet not connected');
+    ensureCorrectChain();
+    const allowance = await readClient.readContract({
+      address: asset, abi: ERC20_ABI,
+      functionName: 'allowance',
+      args: [address as `0x${string}`, LENDING_CONTRACTS.POOL],
+    }) as bigint;
+    if (allowance < amount) {
+      setStatus('approving');
+      const hash = await submitLendingTransaction(address as `0x${string}`, walletClient, nonce =>
+        walletClient.writeContract({
+          address: asset, abi: ERC20_ABI,
+          functionName: 'approve',
+          // Approve just enough for this operation (improves UX vs "Unlimited").
+          args: [LENDING_CONTRACTS.POOL, amount],
+          nonce,
+          gas: 100_000n,
+        }),
+      );
+      const approveReceipt = await readClient.waitForTransactionReceipt({ hash });
+      if (approveReceipt.status === 'reverted') throw new Error('Approval transaction reverted on-chain.');
+
+      // Wait until the read RPC reports the new allowance; otherwise the next
+      // simulation can still see the old value and fail on the first attempt.
+      for (let i = 0; i < 20; i += 1) {
+        const current = await readClient.readContract({
+          address: asset, abi: ERC20_ABI,
+          functionName: 'allowance',
+          args: [address as `0x${string}`, LENDING_CONTRACTS.POOL],
+          }) as bigint;
+        if (current >= amount) break;
+        await sleep(500);
+      }
+    }
+  }, [walletClient, address, ensureCorrectChain]);
+
+  const supply = useCallback(async (asset: `0x${string}`, amount: string, decimals: number) => {
+    if (!walletClient || !address) { setError('Wallet not connected'); return; }
+    try {
+      ensureCorrectChain();
+      setStatus('pending'); setError(null);
+      const parsed = parseUnits(amount, decimals);
+      if (parsed <= 0n) throw new Error('Enter an amount greater than 0.');
+
+      const walletBal = await readClient.readContract({
+        address: asset,
+        abi: ERC20_ABI,
+        functionName: 'balanceOf',
+        args: [address as `0x${string}`],
+      }) as bigint;
+      if (walletBal < parsed) {
+        throw new Error(
+          `Insufficient token balance for this reserve. Balance: ${formatUnits(walletBal, decimals)} (token: ${asset}).`,
+        );
+      }
+
+      await ensureApproval(asset, parsed);
+
+      // Preflight simulation after approval gives a clearer failure before user signs tx.
+      await retryRead(() => readClient.simulateContract({
+        address: LENDING_CONTRACTS.POOL,
+        abi: LENDING_POOL_ABI,
+        functionName: 'supply',
+        args: [asset, parsed, address as `0x${string}`, REFERRAL_CODE],
+        account: address as `0x${string}`,
+      }));
+
+      setStatus('pending');
+      const hash = await submitLendingTransaction(address as `0x${string}`, walletClient, nonce =>
+        walletClient.writeContract({
+          address: LENDING_CONTRACTS.POOL, abi: LENDING_POOL_ABI,
+          functionName: 'supply',
+          args: [asset, parsed, address as `0x${string}`, REFERRAL_CODE],
+          nonce,
+          gas: 400_000n,
+        }),
+      );
+      const receipt = await readClient.waitForTransactionReceipt({ hash });
+      if (receipt.status === 'reverted') throw new Error('Supply transaction reverted on-chain.');
+      setStatus('success');
+    } catch (e) { setError(parseError(e)); setStatus('error'); }
+  }, [walletClient, address, ensureApproval, ensureCorrectChain]);
+
+  const borrow = useCallback(async (asset: `0x${string}`, amount: string, decimals: number) => {
+    if (!walletClient || !address) { setError('Wallet not connected'); return; }
+    try {
+      ensureCorrectChain();
+      setStatus('pending'); setError(null);
+      const parsed = parseUnits(amount, decimals);
+      if (parsed <= 0n) throw new Error('Enter an amount greater than 0.');
+
+      // Revalidate against the protocol's latest collateral, oracle, and
+      // liquidity state before asking the wallet to sign.
+      await retryRead(() => readClient.simulateContract({
+        address: LENDING_CONTRACTS.POOL,
+        abi: LENDING_POOL_ABI,
+        functionName: 'borrow',
+        args: [asset, parsed, BigInt(INTEREST_RATE_MODE.VARIABLE), REFERRAL_CODE, address as `0x${string}`],
+        account: address as `0x${string}`,
+      }), 2);
+
+      const hash = await submitLendingTransaction(address as `0x${string}`, walletClient, nonce =>
+        walletClient.writeContract({
+          address: LENDING_CONTRACTS.POOL, abi: LENDING_POOL_ABI,
+          functionName: 'borrow',
+          args: [asset, parsed, BigInt(INTEREST_RATE_MODE.VARIABLE), REFERRAL_CODE, address as `0x${string}`],
+          nonce,
+          gas: 500_000n,
+        }),
+      );
+      const receipt = await readClient.waitForTransactionReceipt({ hash });
+      if (receipt.status === 'reverted') throw new Error('Borrow transaction reverted on-chain.');
+      setStatus('success');
+    } catch (e) { setError(parseError(e)); setStatus('error'); }
+  }, [walletClient, address, ensureCorrectChain]);
+
+  const repay = useCallback(async (asset: `0x${string}`, amount: string, decimals: number) => {
+    if (!walletClient || !address) { setError('Wallet not connected'); return; }
+    try {
+      ensureCorrectChain();
+      setStatus('pending'); setError(null);
+      const parsed = parseUnits(amount, decimals);
+      await ensureApproval(asset, parsed);
+      setStatus('pending');
+      const hash = await submitLendingTransaction(address as `0x${string}`, walletClient, nonce =>
+        walletClient.writeContract({
+          address: LENDING_CONTRACTS.POOL, abi: LENDING_POOL_ABI,
+          functionName: 'repay',
+          args: [asset, parsed, BigInt(INTEREST_RATE_MODE.VARIABLE), address as `0x${string}`],
+          nonce,
+          gas: 400_000n,
+        }),
+      );
+      const receipt = await readClient.waitForTransactionReceipt({ hash });
+      if (receipt.status === 'reverted') throw new Error('Repay transaction reverted on-chain.');
+      setStatus('success');
+    } catch (e) { setError(parseError(e)); setStatus('error'); }
+  }, [walletClient, address, ensureApproval, ensureCorrectChain]);
+
+  const withdraw = useCallback(async (asset: `0x${string}`, amount: string, decimals: number, useMax = false) => {
+    if (!walletClient || !address) { setError('Wallet not connected'); return; }
+    try {
+      ensureCorrectChain();
+      setStatus('pending'); setError(null);
+      // When withdrawing the full balance use maxUint256 so Aave handles the
+      // exact aToken amount internally — avoids off-by-one reverts caused by
+      // interest accruing between balance-fetch and transaction execution.
+      const amountArg = useMax ? maxUint256 : parseUnits(amount, decimals);
+      const hash = await submitLendingTransaction(address as `0x${string}`, walletClient, nonce =>
+        walletClient.writeContract({
+          address: LENDING_CONTRACTS.POOL, abi: LENDING_POOL_ABI,
+          functionName: 'withdraw',
+          args: [asset, amountArg, address as `0x${string}`],
+          nonce,
+          gas: 500_000n,
+        }),
+      );
+      const receipt = await readClient.waitForTransactionReceipt({ hash });
+      if (receipt.status === 'reverted') throw new Error('Withdraw transaction reverted on-chain.');
+      setStatus('success');
+    } catch (e) { setError(parseError(e)); setStatus('error'); }
+  }, [walletClient, address, ensureCorrectChain]);
+
+  return { status, error, supply, borrow, repay, withdraw, reset };
+}

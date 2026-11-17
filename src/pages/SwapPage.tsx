@@ -1,14 +1,16 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppKitAccount, useAppKit } from '@reown/appkit/react';
 import TokenInput from '../components/common/TokenInput';
 import SlippageSettings from '../components/swap/SlippageSettings';
 import type { Token, SwapQuote } from '../types';
 import { useTokens } from '../context/TokensContext';
-import { FEE_TIERS, CONTRACT_ERRORS } from '../config/contracts';
+import { FEE_TIERS } from '../config/contracts';
+import { getErrorMessage } from '../utils/errors';
 import { getSwapQuote, getTokenBalance, executeSwap } from '../services/api/poolService';
 import { useToast } from '../context/ToastContext';
-import { formatNumber, formatPercent, shortenTxHash } from '../utils/formatUtils';
+import { formatNumber, formatPercent } from '../utils/formatUtils';
 import { recordTxHistory } from '../services/history/txHistoryStorage';
 
 // ─── spring variants ────────────────────────────────────────────────────────
@@ -20,16 +22,6 @@ const cardSpring = {
   transition: { type: 'spring' as const, stiffness: 300, damping: 20 },
 };
 
-function resolveError(err: unknown): string {
-  const msg = (err as { reason?: string; message?: string })?.reason
-    || (err as { message?: string })?.message
-    || 'Transaction failed';
-  for (const [code, friendly] of Object.entries(CONTRACT_ERRORS)) {
-    if (msg.includes(code)) return friendly;
-  }
-  return msg;
-}
-
 function firstTokenOtherThan(list: Token[], addr: string): Token | undefined {
   const a = addr.toLowerCase();
   return list.find(t => t.address.toLowerCase() !== a);
@@ -40,6 +32,7 @@ export default function SwapPage() {
   const { open } = useAppKit();
   const { showToast } = useToast();
   const { tokens } = useTokens();
+  const [searchParams] = useSearchParams();
 
   const [tokenIn, setTokenIn] = useState<Token>(() => tokens[0]);
   const [tokenOut, setTokenOut] = useState<Token>(() => tokens[1] ?? tokens[0]);
@@ -58,6 +51,26 @@ export default function SwapPage() {
     setTokenIn(prev => tokens.find(t => t.address.toLowerCase() === prev.address.toLowerCase()) ?? tokens[0]);
     setTokenOut(prev => tokens.find(t => t.address.toLowerCase() === prev.address.toLowerCase()) ?? tokens[1]);
   }, [tokens]);
+
+  useEffect(() => {
+    if (tokens.length < 2) return;
+    const tokenInParam = searchParams.get('tokenIn');
+    const tokenOutParam = searchParams.get('tokenOut');
+    const feeParam = searchParams.get('fee');
+    if (!tokenInParam || !tokenOutParam) return;
+
+    const resolvedIn = tokens.find(t => t.address.toLowerCase() === tokenInParam.toLowerCase());
+    const resolvedOut = tokens.find(t => t.address.toLowerCase() === tokenOutParam.toLowerCase());
+    if (!resolvedIn || !resolvedOut) return;
+    if (resolvedIn.address.toLowerCase() === resolvedOut.address.toLowerCase()) return;
+
+    setTokenIn(resolvedIn);
+    setTokenOut(resolvedOut);
+    const parsedFee = Number.parseInt(feeParam ?? '', 10);
+    if (Number.isFinite(parsedFee) && FEE_TIERS.some(t => t.fee === parsedFee)) {
+      setFee(parsedFee);
+    }
+  }, [searchParams, tokens]);
 
   useLayoutEffect(() => {
     if (tokens.length < 2) return;
@@ -234,14 +247,14 @@ export default function SwapPage() {
           summary: `Swapped ${amountIn} ${tokenIn.symbol} → ~${quote.amountOut} ${tokenOut.symbol}`,
         });
       }
-      showToast('success', `Swapped successfully! Tx: ${shortenTxHash(result.hash)}`);
+      showToast('success', 'Swap successful', { txHash: result.hash });
       setAmountIn('');
       setAmountOut('');
       setQuote(null);
       setQuoteHint(null);
       await refreshBalances();
     } catch (err) {
-      showToast('error', resolveError(err));
+      showToast('error', getErrorMessage(err, 'Transaction failed'));
     } finally {
       setLoadingSwap(false);
     }

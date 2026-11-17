@@ -4,15 +4,19 @@
  * hydrated (e.g. cold load before wallet connects).
  */
 import { createPublicClient, http } from 'viem';
+import type { Address } from 'viem';
+import { getTransactionCount } from 'viem/actions';
 import { polygonAmoy } from 'viem/chains';
-import { getPublicClient } from 'wagmi/actions';
+import { getPublicClient as wagmiGetPublicClient, getWalletClient } from 'wagmi/actions';
 import { wagmiAdapter } from '../../config/reown';
 import { CHAIN_ID } from '../../config/contracts';
+import { submitWithManagedNonce } from './transactionNonceManager';
 
 export const ammWagmiConfig = wagmiAdapter.wagmiConfig;
 
 /** Singleton fallback — created once, reused for every call before AppKit hydrates. */
 let _fallbackClient: ReturnType<typeof createPublicClient> | null = null;
+let _historyFallbackClient: ReturnType<typeof createPublicClient> | null = null;
 
 function getFallbackPublicClient() {
   if (!_fallbackClient) {
@@ -27,9 +31,58 @@ function getFallbackPublicClient() {
   return _fallbackClient;
 }
 
-export function getAmmPublicClient() {
+function getFallbackHistoryPublicClient() {
+  if (!_historyFallbackClient) {
+    const rpc =
+      (import.meta.env.VITE_POLYGON_AMOY_HISTORY_RPC as string | undefined)?.trim() ||
+      (import.meta.env.VITE_POLYGON_AMOY_RPC as string | undefined)?.trim() ||
+      'https://rpc-amoy.polygon.technology';
+    _historyFallbackClient = createPublicClient({
+      chain: polygonAmoy,
+      transport: http(rpc),
+    });
+  }
+  return _historyFallbackClient;
+}
+
+export function getPublicClient() {
   // `getPublicClient` returns undefined when wagmi config has no transport for
   // this chainId yet (before AppKit finishes hydrating).  Use a direct HTTP
   // client as fallback so reads work immediately on page load.
-  return getPublicClient(ammWagmiConfig, { chainId: CHAIN_ID }) ?? getFallbackPublicClient();
+  return wagmiGetPublicClient(ammWagmiConfig, { chainId: CHAIN_ID }) ?? getFallbackPublicClient();
+}
+
+export async function submitAmmTransaction(
+  account: Address,
+  submit: (nonce: number) => Promise<`0x${string}`>,
+): Promise<`0x${string}`> {
+  const walletClient = await getWalletClient(ammWagmiConfig, { chainId: CHAIN_ID });
+  return submitWithManagedNonce({
+    account,
+    chainId: CHAIN_ID,
+    getNetworkNonce: async () => {
+      // Read through the same wallet transport that submits the raw
+      // transaction. A separate public RPC can lag behind the wallet RPC and
+      // return a nonce that the submission endpoint has already consumed.
+      if (walletClient) {
+        const [latest, pending] = await Promise.all([
+          getTransactionCount(walletClient, { address: account, blockTag: 'latest' }),
+          getTransactionCount(walletClient, { address: account, blockTag: 'pending' }),
+        ]);
+        return Math.max(latest, pending);
+      }
+
+      // Fallback for cold-load/provider hydration.
+      const [latest, pending] = await Promise.all([
+        getTransactionCount(getPublicClient(), { address: account, blockTag: 'latest' }),
+        getTransactionCount(getPublicClient(), { address: account, blockTag: 'pending' }),
+      ]);
+      return Math.max(latest, pending);
+    },
+    submit,
+  });
+}
+
+export function getHistoryPublicClient() {
+  return wagmiGetPublicClient(ammWagmiConfig, { chainId: CHAIN_ID }) ?? getFallbackHistoryPublicClient();
 }

@@ -3,13 +3,19 @@
  * ABIs are inlined in the app — see `src/contracts/abis.ts` and `src/contracts/inlinedAbis.ts`.
  */
 export const CONTRACTS = {
-  WETH9: '0x5A5c039086d2EbC2104AAaD041421304DBA79c8C',
-  Factory: '0x37874728AA16Cc3cFa4196612071fc8129AF8e05',
-  SwapRouter: '0x74d1bB973A524Cd17cBEC489eA05E78Bc7201EDE',
-  NonfungiblePositionManager: '0x26c03A3B131Ce8Cc590f97975C5197e5D8b7105b',
-  LiquidityHelper: '0x22a2fA1c5033f2CA0B31c13AAC65216dE3728774',
-  /** `StakingPool.sol` — stake stakingToken, earn rewardToken */
+  // WETH9: '0x5A5c039086d2EbC2104AAaD041421304DBA79c8C',
+  // Factory: '0x37874728AA16Cc3cFa4196612071fc8129AF8e05',
+  // SwapRouter: '0x74d1bB973A524Cd17cBEC489eA05E78Bc7201EDE',
+  // NonfungiblePositionManager: '0x26c03A3B131Ce8Cc590f97975C5197e5D8b7105b',
+  // LiquidityHelper: '0x22a2fA1c5033f2CA0B31c13AAC65216dE3728774',
+  // /** `StakingPool.sol` — stake stakingToken, earn rewardToken */
   StakingPool: '0x172A0688D35Cf30c7D8e5DA7a1dEF5aa848fB841',
+  WETH9: "0x05677b6Ad6fB1fca3b77a1F28E27f0D5A9C63Ea4",
+  Factory: "0x8D2c055E8554aBCB885bA7128339C2996c629316",
+  SwapRouter: "0x258799F6b0dD66A48fF8d5BF0998ab8304Dc78a9",
+  PositionDescriptor: "0xE4F48501a7A4a5F0eA782760915d58d55b331eEf",
+  NonfungiblePositionManager: "0xbA9c05a1A9F645489Ca1efd59877aE742a286F51",
+  LiquidityHelper: "0x0119D1AEF53258AbD99fbC7A8D5A82581E14CFC1"
 } as const;
 
 /**
@@ -18,6 +24,14 @@ export const CONTRACTS = {
  * Optional RPC override: `VITE_POLYGON_AMOY_RPC` in `.env` (see `config/reown.ts`).
  */
 export const CHAIN_ID = 80_002;
+
+/**
+ * Approximate Amoy block number when the NonfungiblePositionManager was
+ * deployed (~2026-04-06). Used as the start block for Transfer-log scans
+ * so we don't request the full chain history (RPCs cap block ranges).
+ * Set conservatively early — a few thousand blocks before actual deployment.
+ */
+export const NPM_DEPLOYMENT_BLOCK = 37_000_000n;
 
 export const FEE_TIERS = [
   { fee: 500, label: '0.05%', tickSpacing: 10, description: 'Best for stable pairs' },
@@ -44,16 +58,16 @@ export const MIN_TICK = -887272;
  * maxPriorityFeePerGas = 30 gwei
  */
 export const GAS = {
-  maxFeePerGas:         100_000_000_000n, // 100 gwei
-  maxPriorityFeePerGas:  30_000_000_000n, //  30 gwei
+  maxFeePerGas: 100_000_000_000n, // 100 gwei
+  maxPriorityFeePerGas: 30_000_000_000n, //  30 gwei
   limits: {
-    approve:           80_000n,  // standard ERC-20 approve
-    swap:             300_000n,  // Uniswap V3 exactInputSingle
-    mint:             500_000n,  // NPM mint (new position)
-    increaseLiquidity: 400_000n, // NPM increaseLiquidity
-    decreaseLiquidity: 300_000n, // NPM decreaseLiquidity
-    collect:          200_000n,  // NPM collect fees
-    burn:             150_000n,  // NPM burn (close position)
+    approve: 80_000_0n,  // standard ERC-20 approve
+    swap: 300_000_0n,  // Uniswap V3 exactInputSingle
+    mint: 500_000_0n,  // NPM mint (new position)
+    increaseLiquidity: 400_000_0n, // NPM increaseLiquidity
+    decreaseLiquidity: 300_000_0n, // NPM decreaseLiquidity
+    collect: 200_000_0n,  // NPM collect fees
+    burn: 150_000n,  // NPM burn (close position)
   },
 } as const;
 

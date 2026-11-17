@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   Flux Swap — Design Tokens
+   Flux Swap — Design Tokens  (Smart Wallet theme)
    Single source of truth for every color, radius, and shadow in the app.
    Import this file before all other stylesheets.
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -7,33 +7,45 @@
 :root {
 
   /* ── Backgrounds ─────────────────────────────────────────────────────────── */
-  --bg-primary:    #0a0e1a;          /* page background                        */
-  --bg-secondary:  #111827;          /* subtle surface (inputs, tabs, rows)    */
-  --bg-card:       #161e2e;          /* card / panel surface                   */
-  --bg-input:      #0d111f;          /* form input background                  */
-  --bg-overlay:    rgba(0,0,0,0.65); /* modal / drawer backdrop                */
+  --bg-primary:    #080B14;          /* void — page background                 */
+  --bg-secondary:  #0D0D16;          /* deep — subtle surface (inputs, rows)   */
+  --bg-card:       #151521;          /* card surface                           */
+  --bg-card-2:     #1A1A28;          /* elevated card                          */
+  --bg-surface:    #1C1C28;          /* highest surface                        */
+  --bg-input:      #0D0D16;          /* form input background                  */
+  --bg-overlay:    rgba(0,0,0,0.72); /* modal / drawer backdrop                */
+
+  /* Smart Wallet semantic bg aliases */
+  --bg-void:    #080B14;
+  --bg-deep:    #0D0D16;
 
   /* ── Borders ─────────────────────────────────────────────────────────────── */
-  --border:        rgba(55, 65, 100, 0.45);   /* default border                */
-  --border-subtle: rgba(31, 41, 80,  0.30);   /* very faint dividers           */
-  --border-hover:  var(--color-accent);        /* interactive hover border      */
+  --border:        rgba(188, 64, 221, 0.18);   /* default border — magenta tint */
+  --border-subtle: rgba(168, 85, 247, 0.10);   /* very faint dividers           */
+  --border-hover:  var(--color-accent);         /* interactive hover border      */
 
   /* ── Typography ──────────────────────────────────────────────────────────── */
-  --text-primary:   #e6edf3;
+  --text-primary:   #ffffff;
   --text-secondary: #9ca3af;
   --text-muted:     #4b5563;
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-sans:    'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
 
-  /* ── Brand / Accent ──────────────────────────────────────────────────────── */
-  --color-accent:        #6366f1;                /* indigo — primary brand     */
-  --color-accent-light:  #818cf8;                /* lighter indigo             */
-  --color-accent-dim:    rgba(99, 102, 241, 0.15);
-  --color-accent-border: rgba(99, 102, 241, 0.30);
-  --color-accent-alt:    #8b5cf6;                /* violet — secondary brand   */
-  --gradient-brand: linear-gradient(135deg, #6366f1, #8b5cf6);
+  /* ── Brand / Accent (Smart Wallet — Magenta-led) ─────────────────────────── */
+  --color-magenta:       #BC40DD;                /* primary brand — magenta     */
+  --color-purple:        #A855F7;                /* secondary brand — purple    */
+  --color-violet:        #7C3AED;                /* tertiary brand — violet     */
 
-  /* ── Semantic — Success ──────────────────────────────────────────────────── */
-  --color-success:        #10b981;
+  --color-accent:        #BC40DD;                /* primary accent = magenta    */
+  --color-accent-light:  #CE6DE4;                /* lighter magenta             */
+  --color-accent-dim:    rgba(188, 64, 221, 0.15);
+  --color-accent-border: rgba(188, 64, 221, 0.30);
+  --color-accent-alt:    #A855F7;                /* purple — secondary brand    */
+  --gradient-brand: linear-gradient(135deg, #BC40DD, #A855F7);
+
+  /* ── Semantic — Success / Teal ───────────────────────────────────────────── */
+  --color-teal:           #10B981;
+  --color-success:        #10B981;
   --color-success-dim:    rgba(16, 185, 129, 0.15);
   --color-success-border: rgba(16, 185, 129, 0.30);
 
@@ -42,8 +54,9 @@
   --color-danger-dim:    rgba(248, 81, 73, 0.15);
   --color-danger-border: rgba(248, 81, 73, 0.30);
 
-  /* ── Semantic — Warning ──────────────────────────────────────────────────── */
-  --color-warning:        #f59e0b;
+  /* ── Semantic — Warning / Amber ─────────────────────────────────────────── */
+  --color-amber:          #F59E0B;
+  --color-warning:        #F59E0B;
   --color-warning-dim:    rgba(245, 158, 11, 0.15);
   --color-warning-border: rgba(245, 158, 11, 0.30);
 
@@ -54,8 +67,8 @@
   --radius-xl: 20px;
 
   /* ── Shadows ─────────────────────────────────────────────────────────────── */
-  --shadow-card:  0 4px 24px rgba(0,0,0,0.35);
-  --shadow-glow:  0 0 32px rgba(99,102,241,0.18);
+  --shadow-card:  0 4px 24px rgba(0,0,0,0.45);
+  --shadow-glow:  0 0 32px rgba(188,64,221,0.22);
 
   /* ══════════════════════════════════════════════════════════════════════════
      Legacy aliases — keep existing component code working without changes.
@@ -68,8 +81,8 @@
   --accent-danger:    var(--color-danger);
   --accent-warning:   var(--color-warning);
   --accent-purple:    var(--color-accent-alt);
-  --gradient-start:   #6366f1;
-  --gradient-end:     #8b5cf6;
+  --gradient-start:   #BC40DD;
+  --gradient-end:     #A855F7;
 
   /* old staking aliases */
   --stake-bg:     var(--bg-primary);

@@ -3,6 +3,9 @@ import { useAppKitAccount } from '@reown/appkit/react';
 import toast from 'react-hot-toast';
 import { getStakingStats, getUserPosition, postClaim } from '../../services/api/stakingService';
 import { canClaimStakingRewards, formatStakingNumber, STAKING_MIN_CLAIM_REWARD_HUMAN } from '../../utils/stakingFormat';
+import { Zap, Lock, Coins, HandCoins } from 'lucide-react';
+import { notifyTxSuccess } from '../../context/ToastContext';
+import { getErrorMessage } from '../../utils/errors';
 
 function formatTotalStaked(n: number, sym: string): string {
   if (!Number.isFinite(n)) return `— ${sym}`;
@@ -21,7 +24,7 @@ function StatIcon({ children }: { children: React.ReactNode }) {
       background: 'var(--color-accent-dim)',
       border: '1px solid var(--color-accent-border)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      fontSize: 17, flexShrink: 0,
+      color: 'var(--color-accent-light)', flexShrink: 0,
     }}>
       {children}
     </div>
@@ -59,12 +62,12 @@ export default function StatsBar() {
     mutationFn: () => postClaim(address ?? ''),
     onSuccess: (data) => {
       const sym = position?.rewardSymbol ?? '';
-      toast.success(`Claimed ${formatStakingNumber(data.amount, 12)} ${sym}`.trim());
+      notifyTxSuccess(`Claimed ${formatStakingNumber(data.amount, 12)} ${sym}`.trim(), data.txHash);
       qc.invalidateQueries({ queryKey: ['userPosition'] });
       qc.invalidateQueries({ queryKey: ['stakingStats'] });
       qc.invalidateQueries({ queryKey: ['stakingPoolMeta'] });
     },
-    onError: (e: Error) => toast.error(e?.message ?? 'Claim failed.'),
+    onError: (e: Error) => toast.error(getErrorMessage(e, 'Claim failed.')),
   });
 
   const loading = statsLoading || posLoading;
@@ -83,7 +86,7 @@ export default function StatsBar() {
       {/* APR or per-block emission */}
       <div className="stat-glass-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-          <StatIcon>⚡</StatIcon>
+          <StatIcon><Zap size={18} /></StatIcon>
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>
             {stats?.isAprMode ? 'Pool APR' : 'Reward / block'}
           </span>
@@ -103,7 +106,7 @@ export default function StatsBar() {
       {/* Total Locked */}
       <div className="stat-glass-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-          <StatIcon>🔒</StatIcon>
+          <StatIcon><Lock size={18} /></StatIcon>
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>
             Total Locked
           </span>
@@ -119,7 +122,7 @@ export default function StatsBar() {
       {/* Your Staked */}
       <div className="stat-glass-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-          <StatIcon>💎</StatIcon>
+          <StatIcon><Coins size={18} /></StatIcon>
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>
             Your Staked
           </span>
@@ -136,7 +139,7 @@ export default function StatsBar() {
       {/* Earned */}
       <div className="stat-glass-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-          <StatIcon>🎁</StatIcon>
+          <StatIcon><HandCoins size={18} /></StatIcon>
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>
             Earned
           </span>

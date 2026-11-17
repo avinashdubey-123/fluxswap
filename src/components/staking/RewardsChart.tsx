@@ -35,7 +35,7 @@ export default function RewardsChart() {
       layout: {
         background: { color: 'transparent' },
         textColor: '#9ca3af',
-        fontFamily: "'Inter', sans-serif",
+        fontFamily: "'DM Sans', sans-serif",
         attributionLogo: false,
       },
       grid: {
@@ -43,8 +43,8 @@ export default function RewardsChart() {
         horzLines: { color: 'rgba(31,41,55,0.4)' },
       },
       crosshair: {
-        vertLine: { color: 'rgba(99,102,241,0.4)' },
-        horzLine: { color: 'rgba(99,102,241,0.4)' },
+        vertLine: { color: 'rgba(188,64,221,0.4)' },
+        horzLine: { color: 'rgba(188,64,221,0.4)' },
       },
       rightPriceScale: {
         borderColor: 'rgba(31,41,55,0.4)',
@@ -71,9 +71,9 @@ export default function RewardsChart() {
     chartRef.current = chart;
 
     const areaSeries = chart.addSeries(AreaSeries, {
-      lineColor: '#6366f1',
-      topColor: 'rgba(99,102,241,0.35)',
-      bottomColor: 'rgba(99,102,241,0.0)',
+      lineColor: '#BC40DD',
+      topColor: 'rgba(188,64,221,0.35)',
+      bottomColor: 'rgba(188,64,221,0.0)',
       lineWidth: 2,
       priceLineVisible: false,
       lastValueVisible: true,
@@ -112,10 +112,10 @@ export default function RewardsChart() {
           </div>
         </div>
         <span style={{
-          background: 'rgba(99,102,241,0.12)',
-          color: '#818cf8',
+          background: 'rgba(188,64,221,0.12)',
+          color: '#CE6DE4',
           fontSize: 12, fontWeight: 600, padding: '4px 10px',
-          borderRadius: 20, border: '1px solid rgba(99,102,241,0.25)',
+          borderRadius: 20, border: '1px solid rgba(188,64,221,0.25)',
         }}>
           Last 30 days
         </span>

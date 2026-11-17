@@ -4,14 +4,16 @@
 import { formatUnits, maxUint256, parseEventLogs, parseUnits, type Address } from 'viem';
 import { readContract, writeContract } from 'viem/actions';
 import { getWalletClient, waitForTransactionReceipt, getAccount } from 'wagmi/actions';
-import { CHAIN_ID, CONTRACTS } from '../../config/contracts';
+import { CHAIN_ID, CONTRACTS, GAS } from '../../config/contracts';
 import { erc20Abi } from '../../contracts/abis';
 import { stakingPoolAbi } from '../../contracts/stakingPoolAbi';
 import { collectViemErrorText } from '../../utils/viemErrors';
 import { devError, devWarn } from '../../utils/devLog';
-import { ammWagmiConfig, getAmmPublicClient } from './ammClient';
+import { ammWagmiConfig, getPublicClient, submitAmmTransaction } from './ammClient';
 import { STAKING_MIN_CLAIM_REWARD_HUMAN, STAKING_REWARD_MODE_APR } from '../../utils/stakingFormat';
 import { fetchTokenDecimals, fetchTokenSymbol } from './tokenMetadata';
+import { polygonAmoy } from 'viem/chains';
+import { getErrorMessage } from '../../utils/errors';
 
 const config = ammWagmiConfig;
 const poolAddr = CONTRACTS.StakingPool as Address;
@@ -35,7 +37,7 @@ type UserInfoTuple = readonly [bigint, bigint, bigint, bigint];
 
 export async function fetchStakingPoolMeta(): Promise<StakingPoolMeta> {
   try {
-  const pc = getAmmPublicClient();
+  const pc = getPublicClient();
   const [stakingToken, rewardToken, aprBps, totalStaked, rewardMode, rewardPerBlock] = await Promise.all([
     readContract(pc, {
       address: poolAddr,
@@ -101,7 +103,7 @@ export async function fetchStakingUserRaw(walletAddress: string): Promise<{
   lastRewardTs: bigint;
 }> {
   try {
-  const pc = getAmmPublicClient();
+  const pc = getPublicClient();
   const a = walletAddress as Address;
   const [info, pending] = await Promise.all([
     readContract(pc, {
@@ -134,8 +136,7 @@ function normalizeTxError(err: unknown, operation: string): Error {
   if (/User rejected|User denied|denied transaction/i.test(text)) {
     return new Error('Transaction was rejected in your wallet.');
   }
-  if (err instanceof Error) return new Error(text || err.message);
-  return new Error(text || 'Transaction failed');
+  return new Error(getErrorMessage(err, 'Transaction failed. Please try again.'));
 }
 
 async function ensureStakeAllowance(
@@ -144,7 +145,7 @@ async function ensureStakeAllowance(
   stakingToken: Address,
   need: bigint,
 ): Promise<void> {
-  const pc = getAmmPublicClient();
+  const pc = getPublicClient();
   const allowance = (await readContract(pc, {
     address: stakingToken,
     abi: erc20Abi,
@@ -152,12 +153,20 @@ async function ensureStakeAllowance(
     args: [user, poolAddr],
   })) as bigint;
   if (allowance >= need) return;
-  const hash = await writeContract(wallet, {
-    address: stakingToken,
-    abi: erc20Abi,
-    functionName: 'approve',
-    args: [poolAddr, maxUint256],
-  });
+  const hash = await submitAmmTransaction(user, nonce =>
+    writeContract(wallet, {
+      account: user,
+      chain: polygonAmoy,
+      address: stakingToken,
+      abi: erc20Abi,
+      functionName: 'approve',
+      args: [poolAddr, maxUint256],
+      nonce,
+      maxFeePerGas: GAS.maxFeePerGas,
+      maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
+      gas: GAS.limits.approve,
+    }),
+  );
   const receipt = await waitForTransactionReceipt(config, { hash, chainId: CHAIN_ID });
   if (receipt.status !== 'success') {
     devError('tx/staking', 'approveStakingToken: receipt not success', { hash, stakingToken });
@@ -174,12 +183,18 @@ export async function stakeOnChain(amountHuman: string): Promise<{ txHash: `0x${
     const amountWei = parseUnits(amountHuman.trim(), meta.stakeDecimals);
     if (amountWei <= 0n) throw new Error('Amount must be greater than zero.');
     await ensureStakeAllowance(wallet, user, meta.stakingToken, amountWei);
-    const hash = await writeContract(wallet, {
-      address: poolAddr,
-      abi: stakingPoolAbi,
-      functionName: 'stake',
-      args: [amountWei],
-    });
+    const hash = await submitAmmTransaction(user, nonce =>
+      writeContract(wallet, {
+        address: poolAddr,
+        abi: stakingPoolAbi,
+        functionName: 'stake',
+        args: [amountWei],
+        nonce,
+        maxFeePerGas: GAS.maxFeePerGas,
+        maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
+        gas: 200_000n,
+      }),
+    );
     const receipt = await waitForTransactionReceipt(config, { hash, chainId: CHAIN_ID });
     if (receipt.status !== 'success') throw new Error('Stake transaction reverted.');
     return { txHash: hash };
@@ -196,12 +211,18 @@ export async function withdrawOnChain(amountHuman: string): Promise<{ txHash: `0
     const meta = await fetchStakingPoolMeta();
     const amountWei = parseUnits(amountHuman.trim(), meta.stakeDecimals);
     if (amountWei <= 0n) throw new Error('Amount must be greater than zero.');
-    const hash = await writeContract(wallet, {
-      address: poolAddr,
-      abi: stakingPoolAbi,
-      functionName: 'withdraw',
-      args: [amountWei],
-    });
+    const hash = await submitAmmTransaction(user, nonce =>
+      writeContract(wallet, {
+        address: poolAddr,
+        abi: stakingPoolAbi,
+        functionName: 'withdraw',
+        args: [amountWei],
+        nonce,
+        maxFeePerGas: GAS.maxFeePerGas,
+        maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
+        gas: 200_000n,
+      }),
+    );
     const receipt = await waitForTransactionReceipt(config, { hash, chainId: CHAIN_ID });
     if (receipt.status !== 'success') throw new Error('Unstake transaction reverted.');
     return { txHash: hash };
@@ -217,12 +238,18 @@ export async function withdrawAllOnChain(): Promise<{ txHash: `0x${string}` }> {
   try {
     const raw = await fetchStakingUserRaw(user);
     if (raw.stakedWei <= 0n) throw new Error('Nothing staked to withdraw.');
-    const hash = await writeContract(wallet, {
-      address: poolAddr,
-      abi: stakingPoolAbi,
-      functionName: 'withdraw',
-      args: [raw.stakedWei],
-    });
+    const hash = await submitAmmTransaction(user, nonce =>
+      writeContract(wallet, {
+        address: poolAddr,
+        abi: stakingPoolAbi,
+        functionName: 'withdraw',
+        args: [raw.stakedWei],
+        nonce,
+        maxFeePerGas: GAS.maxFeePerGas,
+        maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
+        gas: 200_000n,
+      }),
+    );
     const receipt = await waitForTransactionReceipt(config, { hash, chainId: CHAIN_ID });
     if (receipt.status !== 'success') throw new Error('Unstake transaction reverted.');
     return { txHash: hash };
@@ -237,7 +264,7 @@ export async function claimOnChain(): Promise<{ txHash: `0x${string}`; paidHuman
   if (!wallet || !user) throw new Error(`Connect a wallet on chain ${CHAIN_ID}.`);
   try {
     const meta = await fetchStakingPoolMeta();
-    const pc = getAmmPublicClient();
+    const pc = getPublicClient();
     const pendingWei = (await readContract(pc, {
       address: poolAddr,
       abi: stakingPoolAbi,
@@ -250,11 +277,17 @@ export async function claimOnChain(): Promise<{ txHash: `0x${string}`; paidHuman
         `Minimum claim is ${STAKING_MIN_CLAIM_REWARD_HUMAN} ${meta.rewardSymbol}. Accrue more rewards first.`,
       );
     }
-    const hash = await writeContract(wallet, {
-      address: poolAddr,
-      abi: stakingPoolAbi,
-      functionName: 'claim',
-    });
+    const hash = await submitAmmTransaction(user, nonce =>
+      writeContract(wallet, {
+        address: poolAddr,
+        abi: stakingPoolAbi,
+        functionName: 'claim',
+        nonce,
+        maxFeePerGas: GAS.maxFeePerGas,
+        maxPriorityFeePerGas: GAS.maxPriorityFeePerGas,
+        gas: 200_000n,
+      }),
+    );
     const receipt = await waitForTransactionReceipt(config, { hash, chainId: CHAIN_ID });
     if (receipt.status !== 'success') throw new Error('Claim transaction reverted.');
     let paidWei = 0n;
@@ -266,7 +299,7 @@ export async function claimOnChain(): Promise<{ txHash: `0x${string}`; paidHuman
       });
       const last = evs[evs.length - 1];
       if (last?.args && typeof last.args === 'object' && 'reward' in last.args) {
-        paidWei = last.args.reward as bigint;
+        paidWei = (last.args as { reward: bigint }).reward;
       }
     } catch (parseErr) {
       paidWei = 0n;

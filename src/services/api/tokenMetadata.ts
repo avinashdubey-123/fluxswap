@@ -6,7 +6,7 @@ import type { Address } from 'viem';
 import { getListedTokenMeta, LISTED_TOKEN_META } from '../../config/tokens';
 import type { Token } from '../../types';
 import { erc20Abi } from '../../contracts/abis';
-import { getAmmPublicClient } from './ammClient';
+import { getPublicClient } from './ammClient';
 
 const decimalsCache = new Map<string, number>();
 const symbolCache = new Map<string, string>();
@@ -33,7 +33,7 @@ export async function fetchTokenSymbol(address: string): Promise<string> {
     return listed.symbol;
   }
   try {
-    const pc = getAmmPublicClient();
+    const pc = getPublicClient();
     const sym = (await readContract(pc, {
       address: address as Address,
       abi: erc20Abi,
@@ -53,7 +53,7 @@ export async function fetchTokenDecimals(address: string): Promise<number> {
   const k = address.toLowerCase();
   const hit = decimalsCache.get(k);
   if (hit !== undefined) return hit;
-  const pc = getAmmPublicClient();
+  const pc = getPublicClient();
   const d = (await readContract(pc, {
     address: address as Address,
     abi: erc20Abi,

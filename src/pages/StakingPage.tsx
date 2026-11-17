@@ -9,13 +9,15 @@ import TransactionTable from '../components/staking/TransactionTable';
 import ScrollReveal from '../components/common/ScrollReveal';
 import { getUserPosition, getStakingStats, postClaim, postUnstakeAll } from '../services/api/stakingService';
 import { canClaimStakingRewards, formatStakingNumber, STAKING_MIN_CLAIM_REWARD_HUMAN } from '../utils/stakingFormat';
+import { notifyTxSuccess } from '../context/ToastContext';
+import { getErrorMessage } from '../utils/errors';
 
 type SubTab = 'stake' | 'portfolio' | 'history';
 
 const SUB_TABS: { key: SubTab; label: string }[] = [
-  { key: 'stake',     label: 'Stake Tokens'         },
-  { key: 'portfolio', label: 'Current Portfolio'     },
-  { key: 'history',   label: 'Transaction History'   },
+  { key: 'stake', label: 'Stake Tokens' },
+  { key: 'portfolio', label: 'Current Portfolio' },
+  { key: 'history', label: 'Transaction History' },
 ];
 
 export default function StakingPage() {
@@ -48,9 +50,9 @@ export default function StakingPage() {
 
         {/* ── Tab content ── */}
         <div style={{ marginTop: 40 }}>
-          {activeTab === 'stake'     && <StakeTokensTab />}
+          {activeTab === 'stake' && <StakeTokensTab />}
           {activeTab === 'portfolio' && <PortfolioTab />}
-          {activeTab === 'history'   && <HistoryTab />}
+          {activeTab === 'history' && <HistoryTab />}
         </div>
       </div>
     </div>
@@ -104,24 +106,24 @@ function PortfolioTab() {
   const claimMut = useMutation({
     mutationFn: () => postClaim(address ?? ''),
     onSuccess: (d) => {
-      toast.success(`Claimed ${formatStakingNumber(d.amount, 12)} ${position?.rewardSymbol ?? ''}`.trim());
+      notifyTxSuccess(`Claimed ${formatStakingNumber(d.amount, 12)} ${position?.rewardSymbol ?? ''}`.trim(), d.txHash);
       qc.invalidateQueries({ queryKey: ['userPosition'] });
       qc.invalidateQueries({ queryKey: ['stakingStats'] });
       qc.invalidateQueries({ queryKey: ['stakingPoolMeta'] });
     },
-    onError: (e: Error) => toast.error(e?.message ?? 'Claim failed.'),
+    onError: (e: Error) => toast.error(getErrorMessage(e, 'Claim failed.')),
   });
 
   const unstakeMut = useMutation({
     mutationFn: () => postUnstakeAll(address ?? ''),
-    onSuccess: () => {
-      toast.success('Unstaked full balance.');
+    onSuccess: (d) => {
+      notifyTxSuccess('Unstaked full balance', d.txHash);
       qc.invalidateQueries({ queryKey: ['userPosition'] });
       qc.invalidateQueries({ queryKey: ['stakingStats'] });
       qc.invalidateQueries({ queryKey: ['stakingPoolMeta'] });
       qc.invalidateQueries({ queryKey: ['stakingTokenBalance'] });
     },
-    onError: (e: Error) => toast.error(e?.message ?? 'Unstake failed.'),
+    onError: (e: Error) => toast.error(getErrorMessage(e, 'Unstake failed.')),
   });
 
   const { data: stats } = useQuery({
@@ -131,16 +133,16 @@ function PortfolioTab() {
 
   const positions = position && (position.stakedAmount > 0 || position.pendingRewards > 0)
     ? [
-        {
-          token: position.tokenSymbol,
-          color: 'var(--color-accent-light)',
-          apr: stats?.apr ?? 0,
-          stakedDisplay: position.stakedAmountDisplay,
-          since: position.stakedSince,
-          rewardDisplay: position.pendingRewardsDisplay,
-          rewardSym: position.rewardSymbol,
-        },
-      ]
+      {
+        token: position.tokenSymbol,
+        color: 'var(--color-accent-light)',
+        apr: stats?.apr ?? 0,
+        stakedDisplay: position.stakedAmountDisplay,
+        since: position.stakedSince,
+        rewardDisplay: position.pendingRewardsDisplay,
+        rewardSym: position.rewardSymbol,
+      },
+    ]
     : [];
 
   const activeCount = position && position.stakedAmount > 0 ? 1 : 0;
@@ -201,79 +203,79 @@ function PortfolioTab() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {posLoading
             ? Array.from({ length: 1 }).map((_, i) => (
-                <div key={i} className="skeleton" style={{ height: 100, borderRadius: 16 }} />
-              ))
+              <div key={i} className="skeleton" style={{ height: 100, borderRadius: 16 }} />
+            ))
             : positions.length === 0
               ? (
-                  <p style={{ color: 'var(--text-secondary)', fontSize: 14, margin: 0 }}>
-                    No open staking position. Stake tokens from the first tab.
-                  </p>
-                )
+                <p style={{ color: 'var(--text-secondary)', fontSize: 14, margin: 0 }}>
+                  No open staking position. Stake tokens from the first tab.
+                </p>
+              )
               : positions.map((pos, i) => (
                 <ScrollReveal key={pos.token} delay={i * 0.12}>
-                <div className="position-row-card">
+                  <div className="position-row-card">
 
-                  {/* Token icon + name */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 16, minWidth: 0 }}>
-                    <div
-                      className="position-token-icon"
-                      style={{ background: `${pos.color}18`, border: `1px solid ${pos.color}30` }}
-                    >
-                      <span style={{ fontSize: 20, color: pos.color }}>⬡</span>
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                        <span style={{ fontSize: 17, fontWeight: 700 }}>{pos.token}</span>
-                        <span className="apr-chip">{pos.apr.toFixed(2)}% APR</span>
+                    {/* Token icon + name */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 16, minWidth: 0 }}>
+                      <div
+                        className="position-token-icon"
+                        style={{ background: `${pos.color}18`, border: `1px solid ${pos.color}30` }}
+                      >
+                        <span style={{ fontSize: 20, color: pos.color }}>⬡</span>
                       </div>
-                      <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
-                        Staked since {pos.since}
-                      </p>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                          <span style={{ fontSize: 17, fontWeight: 700 }}>{pos.token}</span>
+                          <span className="apr-chip">{pos.apr.toFixed(2)}% APR</span>
+                        </div>
+                        <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
+                          Staked since {pos.since}
+                        </p>
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Stats */}
-                  <div className="position-stats-grid">
-                    <div>
-                      <p className="position-stat-label">Staked Amount</p>
-                      <p className="position-stat-value">{pos.stakedDisplay} {pos.token}</p>
+                    {/* Stats */}
+                    <div className="position-stats-grid">
+                      <div>
+                        <p className="position-stat-label">Staked Amount</p>
+                        <p className="position-stat-value">{pos.stakedDisplay} {pos.token}</p>
+                      </div>
+                      <div>
+                        <p className="position-stat-label">Pending Rewards</p>
+                        <p className="position-stat-value" style={{ color: 'var(--color-success)' }}>
+                          {pos.rewardDisplay} {pos.rewardSym}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="position-stat-label">Pending Rewards</p>
-                      <p className="position-stat-value" style={{ color: 'var(--color-success)' }}>
-                        {pos.rewardDisplay} {pos.rewardSym}
-                      </p>
-                    </div>
-                  </div>
 
-                  {/* Actions */}
-                  <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
-                    <button
-                      className="btn-stake"
-                      style={{ width: 'auto', padding: '9px 20px', fontSize: 13, borderRadius: 10 }}
-                      onClick={() => claimMut.mutate()}
-                      disabled={
-                        claimMut.isPending
-                        || !canClaimStakingRewards(position?.pendingRewards ?? 0)
-                      }
-                      title={
-                        !canClaimStakingRewards(position?.pendingRewards ?? 0)
-                          ? `Claim unlocks at ${STAKING_MIN_CLAIM_REWARD_HUMAN}+ ${pos.rewardSym}`
-                          : undefined
-                      }
-                    >
-                      Claim Rewards
-                    </button>
-                    <button
-                      className="btn-outline-stake"
-                      style={{ padding: '9px 20px', fontSize: 13, borderRadius: 10 }}
-                      onClick={() => unstakeMut.mutate()}
-                      disabled={unstakeMut.isPending || !position?.stakedAmount}
-                    >
-                      Unstake all
-                    </button>
+                    {/* Actions */}
+                    <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
+                      <button
+                        className="btn-stake"
+                        style={{ width: 'auto', padding: '9px 20px', fontSize: 13, borderRadius: 10 }}
+                        onClick={() => claimMut.mutate()}
+                        disabled={
+                          claimMut.isPending
+                          || !canClaimStakingRewards(position?.pendingRewards ?? 0)
+                        }
+                        title={
+                          !canClaimStakingRewards(position?.pendingRewards ?? 0)
+                            ? `Claim unlocks at ${STAKING_MIN_CLAIM_REWARD_HUMAN}+ ${pos.rewardSym}`
+                            : undefined
+                        }
+                      >
+                        Claim Rewards
+                      </button>
+                      <button
+                        className="btn-outline-stake"
+                        style={{ padding: '9px 20px', fontSize: 13, borderRadius: 10 }}
+                        onClick={() => unstakeMut.mutate()}
+                        disabled={unstakeMut.isPending || !position?.stakedAmount}
+                      >
+                        Unstake all
+                      </button>
+                    </div>
                   </div>
-                </div>
                 </ScrollReveal>
               ))}
         </div>
